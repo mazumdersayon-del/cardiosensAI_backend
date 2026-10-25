@@ -1,0 +1,33 @@
+# Local development stack: PostgreSQL + API. Not a production deployment.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cardiosens
+      POSTGRES_PASSWORD: cardiosens
+      POSTGRES_DB: cardiosens
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cardiosens"]
+      interval: 3s
+      retries: 20
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://cardiosens:cardiosens@db:5432/cardiosens
+      STORAGE_LOCAL_PATH: /data/storage
+    ports: ["8000:8000"]
+    volumes: [storage:/data]
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && python -m app.scripts.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --no-access-log"
+
+volumes:
+  pgdata:
+  storage:

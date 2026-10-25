@@ -1,0 +1,41 @@
+[project]
+name = "cardiosensai-backend"
+version = "0.1.0"
+description = "CardiosensAI connected health monitoring platform — API (FastAPI + PostgreSQL)"
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "Proprietary" }
+dependencies = [
+  "fastapi>=0.143,<1",
+  "uvicorn[standard]>=0.54",
+  "sqlalchemy>=2.1,<2.2",
+  "alembic>=1.20",
+  "psycopg[binary]>=3.3",
+  "pydantic>=2.14,<3",
+  "pydantic-settings>=2.15",
+  "email-validator>=2.3",
+  "pyjwt>=2.15",
+  "pyotp>=2.10",
+  "reportlab>=5.0",
+]
+
+[project.optional-dependencies]
+s3 = ["boto3>=1.43"]
+dev = ["pytest>=9.1", "httpx>=0.28", "ruff>=0.17"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM"]
+ignore = ["B008"]  # FastAPI's Depends() in defaults is idiomatic
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "E501"]
+"alembic/*" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
