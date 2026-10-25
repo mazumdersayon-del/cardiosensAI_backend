@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /v1/
+Disallow: /api/
+Sitemap: https://cardiosens.ai/sitemap.xml

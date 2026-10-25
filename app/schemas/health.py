@@ -42,6 +42,7 @@ class DeviceOut(CamelModel):
     serial: str
     client_ref: str | None
     display_name: str
+    ble_identifier: str | None = None
     firmware: str | None
     battery_pct: int | None
     status: str

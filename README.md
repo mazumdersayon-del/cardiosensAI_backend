@@ -49,7 +49,7 @@ TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost/test pytest   # Postg
 ruff check . && ruff format --check .
 ```
 
-The 31 tests cover the sign-in flow, refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, doctor verification, admin isolation from health data, ECG integrity, signed report links and account deletion.
+The 41 tests cover the sign-in flow, MSG91 delivery (against a local stand-in), refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, doctor verification, admin isolation from health data, ECG integrity, signed report links, account deletion and the home page.
 
 ## Architecture
 
@@ -187,23 +187,71 @@ Also present: `otp_challenges`, `reports`, `ingestion_rejections` (reason codes 
 
 ## Connecting the mobile app
 
-The app's `apiClient.ts` already targets `POST /v1/measurements:batch`, and its `Measurement` JSON is accepted as is. To go live:
+The patient app ([cardioSE-WEB](https://github.com/mazumdersayon-del/cardioSE-WEB)) talks to this API when it's built with `EXPO_PUBLIC_API_BASE_URL` set and simulation off (see its README). Its `src/sync/backend.ts`:
 
-1. Set `expo.extra.apiBaseUrl` in the app's `app.json`.
-2. Build sign-in on `/v1/auth/otp/request` and `/v1/auth/otp/verify`. Store tokens in `expo-secure-store` and refresh with `/v1/auth/refresh`. Wire the token into `HttpUploadClient`, which currently has a `TODO`.
-3. When a device is paired, call `POST /v1/devices` with `clientRef` set to the app's local device id. Readings can then keep using the app's ids.
-4. Report sync outcomes with `PATCH /v1/devices/{id}/status`.
-5. Record onboarding consent with `POST /v1/me/consents` (`data_processing`).
+1. Signs in with `/v1/auth/otp/request` and `/v1/auth/otp/verify` (plus `/v1/auth/mfa/verify` when two-step sign-in is on). Tokens live in `expo-secure-store` and are refreshed with `/v1/auth/refresh`.
+2. Records onboarding consent with `POST /v1/me/consents` (`data_processing`).
+3. Registers each real device with `POST /v1/devices` on its first sync, with `clientRef` set to the app's local device id, so readings keep using the app's ids. Readings from a device that isn't registered yet stay queued on the phone.
+4. Uploads through `POST /v1/measurements:batch` and reports sync outcomes with `PATCH /v1/devices/{id}/status`.
+5. After sign-in, pulls the profile, devices (`bleIdentifier` lets a reinstalled app reconnect) and the last 30 days of readings.
 
 The app's **simulated** readings are refused by design (`reason: Simulated readings are never stored as health data`).
+
+To check the app against a running server (development mode, so codes come back in the response):
+
+```bash
+CARDIOSENS_E2E_API=http://127.0.0.1:8000 npx jest backend.e2e   # in the app repository
+```
 
 ## Configuration
 
 All settings are environment variables. See `.env.example` and `app/core/config.py`. In `staging` and `production`, the app **refuses to start** with development secrets, `DEV_EXPOSE_OTP=true` or the console SMS sender.
 
+**Sign-in codes by SMS:** set `SMS_PROVIDER=msg91`, `MSG91_AUTH_KEY` and `MSG91_TEMPLATE_ID`. The server generates and verifies the code itself; MSG91's [SendOTP API](https://docs.msg91.com/otp/sendotp) only delivers it. The OTP template must be DLT-approved and contain `##OTP##`. If MSG91 refuses or can't be reached, the API answers `503 sms_unavailable`.
+
+## Home page
+
+`GET /` serves the cardiosens.ai home page from `website/`, a copy of the public site's prerendered page and its assets. API routes always take precedence. To refresh the copy after the website changes:
+
+```bash
+python scripts/snapshot_website.py   # rewrites website/; review the diff and commit
+```
+
+`/_next/image` serves the original images, `/blog` redirects to www.cardiosens.ai, and nginx forwards the contact and newsletter forms (`/api/contact`, `/api/newsletter`) to www.cardiosens.ai, where their handlers run.
+
+## Deploying to a server
+
+`deploy.sh` sets up everything on one **Ubuntu 26.04** server: PostgreSQL, a Python 3.13 virtualenv, the API as a systemd service, nginx with a Let's Encrypt certificate, daily backups and a firewall. Point the domain's DNS at the server first, then:
+
+```bash
+git clone https://github.com/mazumdersayon-del/cardiosensAI_backend.git
+cd cardiosensAI_backend
+sudo ./deploy.sh --domain api.cardiosens.ai --email ops@cardiosens.ai \
+     --msg91-auth-key "$MSG91_AUTH_KEY" --msg91-template-id "$MSG91_TEMPLATE_ID" \
+     --admin +919800000009
+```
+
+Updates: `git pull && sudo ./deploy.sh`. Settings from the first run are remembered, and secrets and the database password are generated once and kept in `/etc/cardiosensai/backend.env`.
+
+nginx is set up by `nginx.sh`, which `deploy.sh` runs. Run it on its own to add HTTPS once DNS points at the server (it also switches `API_BASE_URL` to `https://`), or to rewrite the nginx config:
+
+```bash
+sudo ./nginx.sh --domain api.cardiosens.ai --email ops@cardiosens.ai
+```
+
+Without an SMS contract yet, `--mode demo` runs a test server that returns sign-in codes in the API response. **Anyone can then sign in as any number**, so use it only with test data. `sudo ./deploy.sh --help` lists every option.
+
+| Path | What |
+|---|---|
+| `/opt/cardiosensai/app`, `/opt/cardiosensai/venv` | Code (root-owned) and virtualenv |
+| `/etc/cardiosensai/backend.env` | Settings and secrets (`root:cardiosens`, 0640) |
+| `/var/lib/cardiosensai/storage` | ECG waveforms and PDF reports |
+| `/var/backups/cardiosensai` | Daily database dump and file archive, kept 14 days. Copy them off the server |
+| `journalctl -u cardiosensai-api` | API logs |
+
 ## Before production
 
-- **SMS provider:** plug a DLT-registered Indian SMS provider into `app/services/sms.py`. Add email delivery for invites.
+- **SMS provider:** MSG91 is built in (see Configuration); register the sender and OTP template on DLT. Add email delivery for invites.
 - **Secrets:** use a secrets manager (e.g. AWS Secrets Manager or Parameter Store). Rotate `JWT_SECRET` and `SIGNING_KEY`. Encrypt the TOTP secret column at the application layer (KMS).
 - **Infrastructure:**
   - Managed PostgreSQL with encryption at rest, PITR backups and tested restores.
@@ -223,6 +271,7 @@ All settings are environment variables. See `.env.example` and `app/core/config.
 ```
 app/
   main.py                FastAPI app, middleware, router wiring
+  website.py             serves the cardiosens.ai home page at /
   core/                  config, db (UTC timestamps), security (JWT/OTP/signed links), errors, storage, rate limit, logging
   models/                SQLAlchemy models
   schemas/               Pydantic request/response models (camelCase on the wire)
@@ -230,8 +279,11 @@ app/
   api/v1/                auth, me, devices, measurements, ecg, sharing, notifications, reports, audit, admin
   scripts/seed.py        device models, admin, synthetic demo data
 alembic/                 migrations
+website/                 copy of the cardiosens.ai home page (scripts/snapshot_website.py)
 docs/openapi.json        generated API spec
 tests/                   pytest suite
+deploy.sh                single-server deployment for Ubuntu 26.04
+nginx.sh                 nginx + Let's Encrypt in front of the API (run by deploy.sh, or on its own)
 ```
 
 ## Licence

@@ -14,6 +14,7 @@ RUN pip install -r requirements.txt
 
 COPY app ./app
 COPY alembic ./alembic
+COPY website ./website
 COPY alembic.ini pyproject.toml ./
 
 USER app

@@ -34,6 +34,7 @@ def device_out(d: Device) -> DeviceOut:
         serial=d.serial,
         client_ref=d.client_ref,
         display_name=d.display_name,
+        ble_identifier=d.ble_identifier,
         firmware=d.firmware,
         battery_pct=d.battery_pct,
         status=d.status,

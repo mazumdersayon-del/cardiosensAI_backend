@@ -1,0 +1,29 @@
+{
+  "source": "https://www.cardiosens.ai/",
+  "copiedAt": "2026-10-25T18:26:55+00:00",
+  "files": {
+    "_next/static/immutable/chunks/04v3a256el4wd.css": "99504c764671053feb075c1c6bb07f3dc5e64d741631e22d1ea8de1712d983bb",
+    "_next/static/immutable/chunks/0c0hxoamwjsbw.js": "0973c1d64c88adc8e3c950410cb58b288f72118d5965b78049438deb8f2f9683",
+    "_next/static/immutable/chunks/0fcyye5y_3_35.js": "2b49d8f2c8d778ae87cc4efce8c490469491917979b35fe3dcb5be8e3b8f7372",
+    "_next/static/immutable/chunks/0lg0ynlbv2vcx.js": "61b49d21edcf0be1443bada8fc71690ad7177085376924a04ddaa263ba0edd0d",
+    "_next/static/immutable/chunks/0v6dxoofaht2t.js": "7b9e290942477ad28dfe0f9736b0d5578f2b6f21967b5fc843d3618246e29b54",
+    "_next/static/immutable/chunks/18y7xa25n2r2w.js": "0e21a07cd3af3b30f762c3c034f2f055f361c3b5d12fe182145ba77e0226cef5",
+    "_next/static/immutable/chunks/1vd7refi5hlwg.js": "957213f2749af01261ace7c360cc172ebff44477f421a1412a2179b82652a39e",
+    "_next/static/immutable/chunks/2corl6wyj4669.js": "34ed6abf4c6d0d1bb3dc56d3f133d2a5dbc3a3c89c791deab314e27143ac14ce",
+    "_next/static/immutable/chunks/turbopack-0gl_gzg42ax3-.js": "eab7be92bc44d297fb42cdc847e023955460b8c248b095ee4c87fa20f4e4afb4",
+    "apple-touch-icon.png": "c0d8ae5362d8b0a3759f3b77d1ef74516e0efdeb0456554cbbeeea6fa4e094a2",
+    "favicon-16x16.png": "295119a95ff3c3a83561828d84d6290fc542c43f8a29a9eef873ff9b1818418b",
+    "favicon-32x32.png": "1564b9872251d18dc32c6852b489fffcbe65088d4b52047cb695525daf38b998",
+    "favicon-48x48.png": "8b3bd01073b938ddfaa133d6911e26b919b12098f9f56da5c6b9abca2969f5c4",
+    "favicon.ico": "43c4f515121f48293d516f2dec46f699f842beaca1282997df2da6f9b3a34ffa",
+    "icon-192x192.png": "1f349e120fde5ee645e348049e31f0d8a8d6fdb71fab60c0572e328a9b6fb363",
+    "index.html": "0dbe840fd46361474210ad104e32453c580ef36773b20ce2e1b142eba8cc5187",
+    "logos/aic-ccmb-dark.svg": "259dc661ed6bea52c8e151c53b9820f436de75d5960204dba72c4a48b721b1bd",
+    "logos/blaize-dark.svg": "3c9c020fe2ab052b79f891721029f1da69c9f9be95ace545993421bc435ab256",
+    "logos/cardiosensai-logo.png": "ce34a7ee8e99d6ffd7993c6cbb13bef51f7b6df7b311c0be45a501eb6738fab4",
+    "logos/cdac.svg": "6cbbccd88d29e70f1f69f60a850044df93e1b994b2648055386b31e4305dc293",
+    "logos/iit-kharagpur.svg": "dbc487727c073c5c64654ea0a75db8de1af3f90e702fe8aad5274fa08079cb45",
+    "logos/make-in-india.png": "9d50123ee6681c1644215f1506ab4e75fb71679abe7329c9020a07e2e04bda8e",
+    "logos/startup-india.png": "658ea6b324f7bfedd6dcc6e3c6fe3b504aed29684a63aca81a31b70df140783f"
+  }
+}

@@ -9,6 +9,7 @@ from app.core.db import get_db
 from app.core.errors import install_error_handlers
 from app.core.observability import RequestContextMiddleware, configure_logging
 from app.schemas.common import ErrorResponse
+from app.website import install_website
 
 DESCRIPTION = """
 API for the CardiosensAI connected health monitoring platform.
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
         db.execute(text("select 1"))
         return {"status": "ready"}
 
+    install_website(app)  # last: the site's catch-all mount must not shadow API routes
     return app
 
 
