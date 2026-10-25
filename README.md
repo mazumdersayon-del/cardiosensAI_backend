@@ -49,7 +49,7 @@ TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost/test pytest   # Postg
 ruff check . && ruff format --check .
 ```
 
-The 41 tests cover the sign-in flow, MSG91 delivery (against a local stand-in), refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, doctor verification, admin isolation from health data, ECG integrity, signed report links, account deletion and the home page.
+The 38 tests cover the sign-in flow (including no SMS provider), refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, doctor verification, admin isolation from health data, ECG integrity, signed report links, account deletion and the home page.
 
 ## Architecture
 
@@ -207,7 +207,7 @@ CARDIOSENS_E2E_API=http://127.0.0.1:8000 npx jest backend.e2e   # in the app rep
 
 All settings are environment variables. See `.env.example` and `app/core/config.py`. In `staging` and `production`, the app **refuses to start** with development secrets, `DEV_EXPOSE_OTP=true` or the console SMS sender.
 
-**Sign-in codes by SMS:** set `SMS_PROVIDER=msg91`, `MSG91_AUTH_KEY` and `MSG91_TEMPLATE_ID`. The server generates and verifies the code itself; MSG91's [SendOTP API](https://docs.msg91.com/otp/sendotp) only delivers it. The OTP template must be DLT-approved and contain `##OTP##`. If MSG91 refuses or can't be reached, the API answers `503 sms_unavailable`.
+**Sign-in codes by SMS:** no SMS provider is built in. `SMS_PROVIDER=console` (development) only logs that a code was sent. `SMS_PROVIDER=none`, which `deploy.sh` uses in production mode, sends nothing, and `POST /v1/auth/otp/request` answers `503 sms_unavailable`. To send real codes, plug a DLT-registered provider into `app/services/sms.py`.
 
 ## Home page
 
@@ -226,9 +226,7 @@ python scripts/snapshot_website.py   # rewrites website/; review the diff and co
 ```bash
 git clone https://github.com/mazumdersayon-del/cardiosensAI_backend.git
 cd cardiosensAI_backend
-sudo ./deploy.sh --domain api.cardiosens.ai --email ops@cardiosens.ai \
-     --msg91-auth-key "$MSG91_AUTH_KEY" --msg91-template-id "$MSG91_TEMPLATE_ID" \
-     --admin +919800000009
+sudo ./deploy.sh --domain api.cardiosens.ai --email ops@cardiosens.ai --admin +919800000009
 ```
 
 Updates: `git pull && sudo ./deploy.sh`. Settings from the first run are remembered, and secrets and the database password are generated once and kept in `/etc/cardiosensai/backend.env`.
@@ -239,7 +237,7 @@ nginx is set up by `nginx.sh`, which `deploy.sh` runs. Run it on its own to add 
 sudo ./nginx.sh --domain api.cardiosens.ai --email ops@cardiosens.ai
 ```
 
-Without an SMS contract yet, `--mode demo` runs a test server that returns sign-in codes in the API response. **Anyone can then sign in as any number**, so use it only with test data. `sudo ./deploy.sh --help` lists every option.
+Production mode (the default) can't send sign-in codes until an SMS provider is added (see Configuration), so nobody can sign in yet. `--mode demo` runs a test server that returns sign-in codes in the API response instead. **Anyone can then sign in as any number**, so use it only with test data. `sudo ./deploy.sh --help` lists every option.
 
 | Path | What |
 |---|---|
@@ -251,7 +249,7 @@ Without an SMS contract yet, `--mode demo` runs a test server that returns sign-
 
 ## Before production
 
-- **SMS provider:** MSG91 is built in (see Configuration); register the sender and OTP template on DLT. Add email delivery for invites.
+- **SMS provider:** plug a DLT-registered Indian SMS provider into `app/services/sms.py`. Add email delivery for invites.
 - **Secrets:** use a secrets manager (e.g. AWS Secrets Manager or Parameter Store). Rotate `JWT_SECRET` and `SIGNING_KEY`. Encrypt the TOTP secret column at the application layer (KMS).
 - **Infrastructure:**
   - Managed PostgreSQL with encryption at rest, PITR backups and tested restores.

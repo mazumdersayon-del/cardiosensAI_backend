@@ -3,8 +3,8 @@
 #
 #   git clone https://github.com/mazumdersayon-del/cardiosensAI_backend.git
 #   cd cardiosensAI_backend
-#   sudo ./deploy.sh --domain api.cardiosens.ai --email ops@cardiosens.ai \
-#        --msg91-auth-key KEY --msg91-template-id TEMPLATE_ID
+#   sudo ./deploy.sh --mode demo                                            # test server on the IP
+#   sudo ./deploy.sh --domain api.cardiosens.ai --email ops@cardiosens.ai   # with HTTPS
 #
 # To update later:  git pull && sudo ./deploy.sh
 # (settings from the first run are remembered in /etc/cardiosensai/deploy.env).
@@ -24,12 +24,11 @@
 # Options (each can also be given as the environment variable in brackets):
 #   --domain NAME             Public host name, e.g. api.cardiosens.ai [DOMAIN]. Empty: plain HTTP on the server IP.
 #   --email ADDRESS           Let's Encrypt account e-mail; running with it accepts the Let's Encrypt terms [LETSENCRYPT_EMAIL]
-#   --mode production|demo    production (default) sends codes by SMS through MSG91.
-#                             demo returns sign-in codes in the API response: anyone can sign in as any
-#                             number. Test data only, never real patients. [MODE]
-#   --msg91-auth-key KEY      MSG91 auth key [MSG91_AUTH_KEY]
-#   --msg91-template-id ID    MSG91 OTP template id; DLT-approved, containing ##OTP## [MSG91_TEMPLATE_ID]
-#   --admin PHONE             Create or promote this E.164 number to an admin account [ADMIN_PHONE]
+#   --mode production|demo    production (default): production settings. No SMS provider is built in, so
+#                             sign-in codes can't be sent until one is added in app/services/sms.py.
+#                             demo: sign-in codes are returned in the API response, so anyone can sign in
+#                             as any number. Test data only, never real patients. [MODE]
+#   --admin PHONE            Create or promote this E.164 number to an admin account [ADMIN_PHONE]
 #   --demo-data               Add the synthetic demo patient, doctor and family member (demo mode only)
 #   --workers N               uvicorn worker processes (default 1; sign-in rate limits are per process) [WORKERS]
 #   --no-tls                  Skip Let's Encrypt even when a domain is set
@@ -75,8 +74,6 @@ random_secret() { head -c 48 /dev/urandom | base64 -w0 | tr -d '/+='; }
 DOMAIN=${DOMAIN-__unset__}
 LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL-__unset__}
 MODE=${MODE:-}
-MSG91_AUTH_KEY=${MSG91_AUTH_KEY:-}
-MSG91_TEMPLATE_ID=${MSG91_TEMPLATE_ID:-}
 ADMIN_PHONE=${ADMIN_PHONE:-}
 WORKERS=${WORKERS:-}
 DEMO_DATA=0
@@ -88,8 +85,6 @@ while [[ $# -gt 0 ]]; do
     --domain) DOMAIN=${2?}; shift 2 ;;
     --email) LETSENCRYPT_EMAIL=${2?}; shift 2 ;;
     --mode) MODE=${2?}; shift 2 ;;
-    --msg91-auth-key) MSG91_AUTH_KEY=${2?}; shift 2 ;;
-    --msg91-template-id) MSG91_TEMPLATE_ID=${2?}; shift 2 ;;
     --admin) ADMIN_PHONE=${2?}; shift 2 ;;
     --demo-data) DEMO_DATA=1; shift ;;
     --workers) WORKERS=${2?}; shift 2 ;;
@@ -110,18 +105,12 @@ MODE=${MODE:-$(kv_get MODE "$STATE_FILE")}
 MODE=${MODE:-production}
 WORKERS=${WORKERS:-$(kv_get WORKERS "$STATE_FILE")}
 WORKERS=${WORKERS:-1}
-MSG91_AUTH_KEY=${MSG91_AUTH_KEY:-$(kv_get MSG91_AUTH_KEY "$ENV_FILE")}
-MSG91_TEMPLATE_ID=${MSG91_TEMPLATE_ID:-$(kv_get MSG91_TEMPLATE_ID "$ENV_FILE")}
 
 [[ $MODE == production || $MODE == demo ]] || die "--mode must be production or demo"
 [[ $WORKERS =~ ^[1-9][0-9]*$ ]] || die "--workers must be a positive number"
 [[ -z $DOMAIN || $DOMAIN =~ ^[A-Za-z0-9.-]+$ ]] || die "Invalid --domain: $DOMAIN"
 [[ -z $ADMIN_PHONE || $ADMIN_PHONE =~ ^\+[1-9][0-9]{7,14}$ ]] || die "--admin must be an E.164 number such as +919812345678"
-if [[ $MODE == production ]]; then
-  [[ -n $MSG91_AUTH_KEY && -n $MSG91_TEMPLATE_ID ]] ||
-    die "Production sends sign-in codes through MSG91: pass --msg91-auth-key and --msg91-template-id (or use --mode demo for a test server)"
-  [[ $DEMO_DATA -eq 0 ]] || die "--demo-data is only allowed with --mode demo"
-fi
+[[ $MODE == demo || $DEMO_DATA -eq 0 ]] || die "--demo-data is only allowed with --mode demo"
 if [[ -n $DOMAIN && $TLS -eq 1 && -z $LETSENCRYPT_EMAIL && ! -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
   die "HTTPS needs --email for Let's Encrypt (or pass --no-tls)"
 fi
@@ -134,6 +123,9 @@ fi
 if [[ $MODE == demo ]]; then
   warn "DEMO MODE: sign-in codes are returned by the API, so anyone can sign in as any phone number."
   warn "Use this server for test data only. Never store real patient data on it."
+else
+  warn "No SMS provider is built in: this server can't send sign-in codes, so nobody can sign in"
+  warn "until a provider is added in app/services/sms.py. Use --mode demo for a test server."
 fi
 
 # ---------------------------------------------------------------- packages
@@ -227,9 +219,7 @@ kv_set STORAGE_LOCAL_PATH $DATA_DIR/storage $ENV_FILE
 if [[ $MODE == production ]]; then
   kv_set ENV production $ENV_FILE
   kv_set DEV_EXPOSE_OTP false $ENV_FILE
-  kv_set SMS_PROVIDER msg91 $ENV_FILE
-  kv_set MSG91_AUTH_KEY "$MSG91_AUTH_KEY" $ENV_FILE
-  kv_set MSG91_TEMPLATE_ID "$MSG91_TEMPLATE_ID" $ENV_FILE
+  kv_set SMS_PROVIDER none $ENV_FILE
 else
   kv_set ENV development $ENV_FILE
   kv_set DEV_EXPOSE_OTP true $ENV_FILE
@@ -388,5 +378,9 @@ CardiosensAI backend is running ($MODE mode).
   Logs:        journalctl -u $SERVICE -f
   Backups:     $BACKUP_DIR (daily; copy them off this server)
 EOF
-[[ $MODE == demo ]] && warn "Demo mode: sign-in codes are visible to anyone. Test data only."
+if [[ $MODE == demo ]]; then
+  warn "Demo mode: sign-in codes are visible to anyone. Test data only."
+else
+  warn "Sign-in is unavailable until an SMS provider is added (app/services/sms.py)."
+fi
 exit 0

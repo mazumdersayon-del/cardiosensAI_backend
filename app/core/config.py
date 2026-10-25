@@ -28,12 +28,7 @@ class Settings(BaseSettings):
     otp_max_attempts: int = 5
     # Development convenience: return the OTP in the API response. Refused outside development/test.
     dev_expose_otp: bool = False
-    sms_provider: Literal["console", "none", "msg91"] = "console"
-    # MSG91 SendOTP (https://docs.msg91.com/otp/sendotp). The template must be DLT-approved and contain ##OTP##.
-    msg91_auth_key: str = ""
-    msg91_template_id: str = ""
-    msg91_base_url: str = "https://control.msg91.com"
-    sms_timeout_s: float = 10.0
+    sms_provider: Literal["console", "none"] = "console"
 
     invite_ttl_s: int = 72 * 3600
     report_link_ttl_s: int = 10 * 60
@@ -58,8 +53,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_production(self) -> "Settings":
-        if self.sms_provider == "msg91" and not (self.msg91_auth_key and self.msg91_template_id):
-            raise ValueError("SMS_PROVIDER=msg91 needs MSG91_AUTH_KEY and MSG91_TEMPLATE_ID")
         if self.env in ("staging", "production"):
             problems = []
             if "dev-only" in self.jwt_secret or len(self.jwt_secret) < 32:
