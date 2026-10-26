@@ -196,3 +196,41 @@ tr:last-child td { border-bottom: 0; }
 .checklist { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .checklist li { display: flex; gap: 10px; align-items: center; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* phone number: country dropdown + number */
+.field[role='group'] { display: flex; flex-direction: column; gap: 6px; font-weight: 600; color: var(--heading); font-size: 0.9rem; }
+.field[role='group'] small { font-weight: 400; }
+.phone-row { display: flex; align-items: stretch; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--card); overflow: hidden; }
+.phone-row:focus-within { outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent); outline-offset: 2px; }
+.phone-row select, .phone-row input { border: 0; border-radius: 0; min-height: 44px; background: transparent; }
+.phone-row select:focus-visible, .phone-row input:focus-visible { outline: none; }
+.phone-cc { width: 8.5rem; flex: 0 0 auto; padding-right: 4px; border-right: 1px solid var(--line) !important; text-overflow: ellipsis; }
+.phone-row input { flex: 1; min-width: 0; padding-left: 10px; font-weight: 400; }
+
+/* live ECG indicator */
+.live-dot { animation: live-pulse 1.2s ease-in-out infinite; }
+@keyframes live-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+tr[aria-selected='true'] td { background: var(--card-2); }
+
+/* documents */
+textarea { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; width: 100%; resize: vertical; }
+.upload-box { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: var(--card-2); }
+.dropzone { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border: 1.5px dashed var(--line-strong); border-radius: 10px; padding: 14px; }
+.file-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.file-chips li { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 0.85rem; background: var(--card); max-width: 100%; }
+.file-chips li.bad { border-color: var(--danger); color: var(--danger); }
+.file-chips li > span { font-weight: 700; font-size: 0.7rem; color: var(--primary); }
+.file-chips button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 4px; }
+.doc-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.doc-files { display: flex; flex-wrap: wrap; gap: 12px; }
+.doc-file { display: flex; gap: 10px; align-items: center; width: 240px; max-width: 100%; }
+.doc-thumb { width: 64px; height: 64px; flex: 0 0 64px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--card-2); overflow: hidden; cursor: pointer; padding: 0; display: grid; place-items: center; }
+.doc-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.pdf-badge { font-weight: 800; font-size: 0.8rem; color: var(--danger); }
+.doc-file-meta { display: flex; flex-direction: column; min-width: 0; }
+.doc-file-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--heading); font-weight: 600; font-size: 0.9rem; }
+.linklike { border: 0; background: none; padding: 0; color: var(--primary); cursor: pointer; font: inherit; text-decoration: underline; }
+.comments { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.comment { background: var(--card-2); border-radius: 10px; padding: 10px 12px; }
+.history-toggle { width: 100%; justify-content: space-between; }

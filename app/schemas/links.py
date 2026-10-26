@@ -36,6 +36,23 @@ class LinkOut(CamelModel):
     ended_at: datetime | None
 
 
+class LatestValueOut(CamelModel):
+    value: float | None = None
+    systolic: int | None = None
+    diastolic: int | None = None
+    unit: str
+    measured_at: datetime
+
+
+class EcgBriefOut(CamelModel):
+    id: str
+    started_at: datetime
+    lead: str
+    lead_count: int
+    duration_s: float
+    average_hr: int | None
+
+
 class LinkedPatientOut(CamelModel):
     patient_id: str
     unique_id: str
@@ -45,6 +62,9 @@ class LinkedPatientOut(CamelModel):
     linked_at: datetime | None
     last_measurement_at: datetime | None
     doctors: list[PartyOut] = Field(default_factory=list, description="Clinic view: the clinic's doctors who also follow this patient")
+    latest: dict[str, LatestValueOut] = Field(default_factory=dict, description="Newest hr, spo2 and bp readings")
+    latest_ecg: EcgBriefOut | None = None
+    ecg_live: str | None = Field(default=None, description="live | stalled while an ECG is being recorded, else null")
 
 
 class ClinicDoctorOut(CamelModel):

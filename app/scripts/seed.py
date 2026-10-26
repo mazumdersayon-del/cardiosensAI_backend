@@ -25,6 +25,7 @@ from app.core.storage import get_storage
 from app.models import AccessGrant, CareLink, Device, DeviceModel, EcgRecording, Measurement, Organization, ProfessionalProfile, User
 from app.services import email
 from app.services.accounts import allocate_unique_id, issue_action_token
+from app.services.ecg_synth import Synth12
 
 DEVICE_MODELS = [
     {
@@ -93,6 +94,45 @@ def ensure_user(db: Session, phone: str, role: str, name: str, code: str | None 
     return u
 
 
+def add_demo_12lead(db: Session, patient: User) -> None:
+    """Databases seeded before 12-lead support get the demo 12-lead recording added once."""
+    if db.scalar(select(EcgRecording.id).where(EcgRecording.patient_id == patient.id, EcgRecording.client_id == "demo_ecg_12lead")):
+        return
+    wear = db.scalar(
+        select(Device).join(DeviceModel).where(Device.patient_id == patient.id, DeviceModel.code == "cardiosensai-wearable-dev")
+    )
+    if wear is None:
+        return
+    synth = Synth12(fs=500, hr=74, seed=12)
+    raw12 = synth.raw(500 * 10)
+    rec12 = uuid.uuid4()
+    key12 = f"ecg/{patient.id}/{rec12}.i16"
+    get_storage().put(key12, raw12, "application/octet-stream")
+    db.add(
+        EcgRecording(
+            id=rec12,
+            patient_id=patient.id,
+            client_id="demo_ecg_12lead",
+            device_id=wear.id,
+            started_at=utcnow() - timedelta(minutes=40),
+            utc_offset_min=330,
+            lead="12-lead",
+            leads=list(synth.leads),
+            sample_rate_hz=500,
+            sample_count=500 * 10,
+            mm_per_mv=10,
+            mm_per_sec=25,
+            average_hr=74,
+            poor_quality_segments=[],
+            quality="good",
+            acquisition="simulated",
+            storage_key=key12,
+            sha256=hashlib.sha256(raw12).hexdigest(),
+        )
+    )
+    print("Added the demo 12-lead ECG.")
+
+
 def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
     rnd = random.Random(4812)  # noqa: S311 - synthetic demo data, not security
     now = utcnow()
@@ -130,6 +170,7 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
         )
 
     if db.scalar(select(Device).where(Device.patient_id == patient.id)) is not None:
+        add_demo_12lead(db, patient)
         print("Demo data already present.")
         return
     reg = now - timedelta(days=40)
@@ -224,6 +265,7 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
             started_at=now - timedelta(hours=3),
             utc_offset_min=ist,
             lead="Lead I",
+            leads=["I"],
             sample_rate_hz=fs,
             sample_count=len(samples),
             mm_per_mv=10,
@@ -234,6 +276,35 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
             acquisition="simulated",
             storage_key=key,
             sha256=hashlib.sha256(raw).hexdigest(),
+        )
+    )
+
+    # And a synthetic 10 s 12-lead ECG (interleaved frames), the newest recording.
+    synth = Synth12(fs=500, hr=74, seed=12)
+    raw12 = synth.raw(500 * 10)
+    rec12 = uuid.uuid4()
+    key12 = f"ecg/{patient.id}/{rec12}.i16"
+    get_storage().put(key12, raw12, "application/octet-stream")
+    db.add(
+        EcgRecording(
+            id=rec12,
+            patient_id=patient.id,
+            client_id="demo_ecg_12lead",
+            device_id=wear.id,
+            started_at=now - timedelta(minutes=40),
+            utc_offset_min=ist,
+            lead="12-lead",
+            leads=list(synth.leads),
+            sample_rate_hz=500,
+            sample_count=500 * 10,
+            mm_per_mv=10,
+            mm_per_sec=25,
+            average_hr=74,
+            poor_quality_segments=[],
+            quality="good",
+            acquisition="simulated",
+            storage_key=key12,
+            sha256=hashlib.sha256(raw12).hexdigest(),
         )
     )
 

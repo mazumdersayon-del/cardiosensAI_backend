@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Organization, type ProfessionalProfile } from '../api';
 import { useAuth } from '../auth';
+import PhoneInput from '../components/PhoneInput';
 import { MfaSetup } from '../components/Setup';
 import { Banner, errorText, StatusPill } from '../components/ui';
 import { formatId, ROLE_LABEL } from '../format';
@@ -165,7 +166,7 @@ function ClinicDetails() {
       {input('address', 'Address', { minLength: 3 })}
       {input('city', 'City', { minLength: 2 })}
       {input('registrationNumber', 'Registration / licence number', { minLength: 3 })}
-      {input('phone', 'Clinic phone', { type: 'tel', pattern: '\\+[1-9]\\d{7,14}' })}
+      <PhoneInput label="Clinic phone" value={f.phone} onChange={(v) => setF((x) => ({ ...x, phone: v }))} required />
       <Banner kind="info">Changing these details sends the clinic back for verification. The clinic can’t see patient data until it is verified again.</Banner>
       {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
       <div>

@@ -9,7 +9,7 @@
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -20,12 +20,13 @@ from app.core.db import get_db, utcnow
 from app.core.errors import bad_request, conflict, forbidden, not_found
 from app.core.ids import normalize_unique_id, role_of
 from app.core.ratelimit import limiter
-from app.models import AccessGrant, CareLink, Measurement, Organization, ProfessionalProfile, User
+from app.models import AccessGrant, AuditEvent, CareLink, EcgLiveSession, EcgRecording, Measurement, Organization, ProfessionalProfile, User
 from app.models.link import LINK_SIDES
-from app.schemas.links import ClinicDoctorOut, LinkedPatientOut, LinkOut, LinkRequestIn, PartyOut
+from app.schemas.links import ClinicDoctorOut, EcgBriefOut, LatestValueOut, LinkedPatientOut, LinkOut, LinkRequestIn, PartyOut
 from app.services import audit
 from app.services.accounts import account_status, can_view_patients, organization_of
 from app.services.authz import SHAREABLE, VITALS
+from app.services.ecg import live_state
 from app.services.notifications import notify
 
 router = APIRouter(tags=["links"])
@@ -443,6 +444,53 @@ def end_link(
     return _link_out(db, user, link)
 
 
+SUMMARY_VITALS = ("hr", "spo2", "bp")
+
+
+def _summary(db: Session, viewer: User, grant: AccessGrant, patient_id: uuid.UUID) -> dict:
+    """Newest readings, last ECG and live state for the dashboard. Logged in the patient's access log at most hourly per viewer."""
+    latest: dict[str, LatestValueOut] = {}
+    for vital in SUMMARY_VITALS:
+        if vital not in grant.vitals:
+            continue
+        m = db.scalar(
+            select(Measurement)
+            .where(Measurement.patient_id == patient_id, Measurement.vital == vital)
+            .order_by(Measurement.measured_at.desc())
+            .limit(1)
+        )
+        if m is not None:
+            latest[vital] = LatestValueOut(
+                value=m.value, systolic=m.systolic, diastolic=m.diastolic, unit=m.unit, measured_at=m.measured_at
+            )
+    ecg = live = None
+    if "ecg" in grant.vitals:
+        rec = db.scalar(select(EcgRecording).where(EcgRecording.patient_id == patient_id).order_by(EcgRecording.started_at.desc()).limit(1))
+        if rec is not None:
+            ecg = EcgBriefOut(
+                id=str(rec.id),
+                started_at=rec.started_at,
+                lead=rec.lead,
+                lead_count=len(rec.leads or [rec.lead]),
+                duration_s=round(rec.sample_count / rec.sample_rate_hz, 1),
+                average_hr=rec.average_hr,
+            )
+        sess = db.scalar(select(EcgLiveSession).where(EcgLiveSession.patient_id == patient_id, EcgLiveSession.status == "live"))
+        live = live_state(sess) if sess is not None else None
+    if latest or ecg:
+        recent = db.scalar(
+            select(AuditEvent.id).where(
+                AuditEvent.actor_user_id == viewer.id,
+                AuditEvent.patient_id == patient_id,
+                AuditEvent.action == "dashboard.summary",
+                AuditEvent.at >= utcnow() - timedelta(hours=1),
+            )
+        )
+        if recent is None:
+            audit.record(db, actor=viewer, action="dashboard.summary", patient_id=patient_id, detail="Latest readings", grant_id=grant.id)
+    return {"latest": latest, "latest_ecg": ecg, "ecg_live": live}
+
+
 def _last_measurement(db: Session, patient_id: uuid.UUID) -> datetime | None:
     return db.scalar(select(func.max(Measurement.measured_at)).where(Measurement.patient_id == patient_id, Measurement.vital.in_(VITALS)))
 
@@ -483,6 +531,7 @@ def linked_patients(user: User = Depends(get_current_user), db: Session = Depend
                 doctors.append(_user_party(db, clinic_doctors[did]))
         out.append(
             LinkedPatientOut(
+                **_summary(db, user, grant, patient.id),
                 patient_id=str(patient.id),
                 unique_id=patient.unique_id,
                 full_name=patient.full_name,
@@ -493,6 +542,7 @@ def linked_patients(user: User = Depends(get_current_user), db: Session = Depend
                 doctors=doctors,
             )
         )
+    db.commit()
     return out
 
 

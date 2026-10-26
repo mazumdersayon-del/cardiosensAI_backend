@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     rate_limit_login_per_ip: int = 50
     refresh_cookie_name: str = "cs_refresh"
 
+    # Medical documents (PDF / JPEG uploads)
+    max_document_files: int = 10
+    max_document_file_bytes: int = 15 * 1024 * 1024
+    max_document_upload_bytes: int = 50 * 1024 * 1024
+    document_link_ttl_s: int = 10 * 60
+
     invite_ttl_s: int = 72 * 3600
     report_link_ttl_s: int = 10 * 60
 

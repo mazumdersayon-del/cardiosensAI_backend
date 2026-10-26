@@ -8,6 +8,8 @@
 #   bash scripts/run_local.sh --port 8001      API port (default 8000)
 #   bash scripts/run_local.sh --no-demo        don't add the demo patient / doctor / clinic
 #   bash scripts/run_local.sh totp             print the current authenticator code for the demo doctor and clinic
+#   bash scripts/run_local.sh ecg-live [S]     stream a synthetic 12-lead live ECG for the demo patient for S seconds
+#                                       (default 120; 0 = until Ctrl+C) to a running API (PORT=8000 by default)
 #   bash scripts/run_local.sh stop             stop the local database container (data is kept)
 #
 # Needs: Docker, Node 20+ (for the web app). Python 3.13 comes from uv; if uv isn't installed, the
@@ -43,6 +45,10 @@ case "${1:-}" in
   stop)
     docker stop "$PG_CONTAINER" >/dev/null 2>&1 && echo "Stopped $PG_CONTAINER (data kept in volume $PG_VOLUME)" || echo "Not running"
     exit 0
+    ;;
+  ecg-live)
+    [[ -x $VENV/bin/python ]] || die "Run bash scripts/run_local.sh once first"
+    exec "$VENV/bin/python" -m app.scripts.simulate_ecg --base-url "http://localhost:${PORT:-8000}" --seconds "${2:-120}"
     ;;
   totp)
     [[ -x $VENV/bin/python ]] || die "Run bash scripts/run_local.sh once first"

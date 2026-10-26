@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Float, ForeignKey, Index, Integer, SmallInteger, String, UniqueConstraint, Uuid
+from sqlalchemy import Float, ForeignKey, Index, Integer, LargeBinary, SmallInteger, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, JSONType, UTCDateTime, utcnow
@@ -61,9 +61,11 @@ class EcgRecording(Base):
     device_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"))
     started_at: Mapped[datetime] = mapped_column(UTCDateTime)
     utc_offset_min: Mapped[int] = mapped_column(SmallInteger)
-    lead: Mapped[str] = mapped_column(String(16))
+    lead: Mapped[str] = mapped_column(String(16))  # display label, e.g. "Lead I" or "12-lead"
+    # Channel names in storage order. Samples are interleaved frames: frame k = [lead0, lead1, ...].
+    leads: Mapped[list] = mapped_column(JSONType, default=list)
     sample_rate_hz: Mapped[int] = mapped_column(Integer)
-    sample_count: Mapped[int] = mapped_column(Integer)
+    sample_count: Mapped[int] = mapped_column(Integer)  # frames (samples per lead)
     sample_format: Mapped[str] = mapped_column(String(16), default="int16le_uv")
     mm_per_mv: Mapped[float] = mapped_column(Float)
     mm_per_sec: Mapped[float] = mapped_column(Float)
@@ -87,4 +89,44 @@ class IngestionRejection(Base):
     device_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     client_id: Mapped[str | None] = mapped_column(String(64))
     reason_code: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class EcgLiveSession(Base):
+    """An ECG being recorded right now. The device streams chunks; viewers poll for new frames.
+
+    Stopping (or 2 minutes without data) turns the session into an ordinary EcgRecording and
+    deletes the chunks.
+    """
+
+    __tablename__ = "ecg_live_sessions"
+    __table_args__ = (Index("ix_ecg_live_patient_status", "patient_id", "status"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    device_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"))
+    leads: Mapped[list] = mapped_column(JSONType)
+    sample_rate_hz: Mapped[int] = mapped_column(Integer)
+    mm_per_mv: Mapped[float] = mapped_column(Float)
+    mm_per_sec: Mapped[float] = mapped_column(Float)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    utc_offset_min: Mapped[int] = mapped_column(SmallInteger, default=0)
+    last_chunk_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    frames: Mapped[int] = mapped_column(Integer, default=0)
+    average_hr: Mapped[int | None] = mapped_column(SmallInteger)
+    status: Mapped[str] = mapped_column(String(12), default="live")  # live | stopped
+    recording_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ecg_recordings.id", ondelete="SET NULL"))
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class EcgLiveChunk(Base):
+    __tablename__ = "ecg_live_chunks"
+    __table_args__ = (UniqueConstraint("session_id", "seq", name="uq_ecg_live_chunk_seq"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ecg_live_sessions.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer)
+    start_frame: Mapped[int] = mapped_column(Integer)
+    frames: Mapped[int] = mapped_column(Integer)
+    data: Mapped[bytes] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

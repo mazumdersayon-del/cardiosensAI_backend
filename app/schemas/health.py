@@ -162,7 +162,13 @@ class EcgIn(CamelModel):
     id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.:\-]+$")
     device_id: str
     started_at: AwareDatetime
-    lead: str = Field(max_length=16)
+    lead: str = Field(max_length=16, description='Display label, e.g. "Lead I" or "12-lead"')
+    leads: list[str] | None = Field(
+        default=None,
+        max_length=12,
+        description="Multi-lead recordings: channel names in sample order (I, II, III, aVR, aVL, aVF, V1–V6). "
+        "Samples are then interleaved frames. Omit for a single-lead recording",
+    )
     sample_rate_hz: int = Field(ge=50, le=2000)
     calibration: Calibration
     average_hr: int | None = Field(default=None, ge=20, le=300)
@@ -179,6 +185,7 @@ class EcgOut(CamelModel):
     started_at: str
     duration_s: float
     lead: str
+    leads: list[str] = Field(description="Channel names in sample order; samples are interleaved frames when there are several")
     sample_rate_hz: int
     sample_count: int
     sample_format: str
@@ -194,3 +201,41 @@ class EcgOut(CamelModel):
 class EcgCreatedOut(CamelModel):
     status: Literal["accepted", "duplicate"]
     recording: EcgOut
+
+
+class EcgLiveStartIn(CamelModel):
+    device_id: str
+    leads: list[str] = Field(min_length=1, max_length=12)
+    sample_rate_hz: int = Field(ge=50, le=1000)
+    calibration: Calibration = Calibration(mm_per_mv=10, mm_per_sec=25)
+    started_at: AwareDatetime | None = None
+
+
+class EcgLiveChunkIn(CamelModel):
+    seq: int = Field(ge=0, le=100_000, description="0, 1, 2... Re-sending a seq that was already stored is ignored")
+    samples_base64: str = Field(description="Interleaved little-endian int16 frames (µV), at most 10 s")
+    average_hr: int | None = Field(default=None, ge=20, le=300)
+
+
+class EcgLiveStopIn(CamelModel):
+    quality: Literal["good", "poor", "unknown"] = "unknown"
+
+
+class EcgLiveOut(CamelModel):
+    id: str
+    patient_id: str
+    state: Literal["live", "stalled", "stopped"] = Field(description="live: data within 5 s; stalled: no data for 5 s or more")
+    leads: list[str]
+    sample_rate_hz: int
+    calibration: Calibration
+    started_at: datetime
+    last_chunk_at: datetime | None
+    frames: int
+    duration_s: float
+    average_hr: int | None
+    recording_id: str | None
+
+
+class EcgLiveStatusOut(CamelModel):
+    live: EcgLiveOut | None
+    last_recording: EcgOut | None

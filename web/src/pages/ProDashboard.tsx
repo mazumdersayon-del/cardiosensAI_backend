@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, type ClinicDoctor, type LinkedPatient } from '../api';
+import { api, type ClinicDoctor, type LatestValue, type LinkedPatient } from '../api';
 import { useAuth } from '../auth';
-import EcgPanel from '../components/Ecg';
+import DocumentsPanel from '../components/Documents';
+import EcgPanel, { LiveEcg } from '../components/Ecg';
 import IdCard from '../components/IdCard';
 import { LinkRequestBox, useLinks } from '../components/Links';
 import ReportsPanel from '../components/Reports';
@@ -11,19 +12,44 @@ import { Banner, useLoad } from '../components/ui';
 import { History, LatestVitals } from '../components/Vitals';
 import { ago, day, formatId, when } from '../format';
 
-/** Doctor and clinic home: patients who approved a link. */
+function LatestCell({ v, kind }: { v: LatestValue | undefined; kind: 'hr' | 'spo2' | 'bp' }) {
+  if (!v) return <span className="muted">—</span>;
+  const text = kind === 'bp' ? `${v.systolic}/${v.diastolic}` : `${Math.round(v.value ?? 0)}`;
+  return (
+    <span title={when(v.measuredAt)}>
+      <strong className="mono">{text}</strong> <small className="muted">{v.unit}</small>
+      <br />
+      <small className="muted">{ago(v.measuredAt)}</small>
+    </span>
+  );
+}
+
+function activity(p: LinkedPatient): number {
+  if (p.ecgLive) return Number.MAX_SAFE_INTEGER;
+  const times = [p.lastMeasurementAt, p.latestEcg?.startedAt].filter(Boolean).map((t) => Date.parse(t as string));
+  return times.length ? Math.max(...times) : 0;
+}
+
+/** Doctor and clinic home: latest recordings of patients who approved a link, newest activity first. */
 export function ProDashboard() {
   const { user, status } = useAuth();
   const [q, setQ] = useState('');
-  const [patients, err] = useLoad(() => api<LinkedPatient[]>('GET', '/v1/linked-patients'), [status?.canViewPatients]);
+  const [tick, setTick] = useState(0);
+  const [patients, err] = useLoad(() => api<LinkedPatient[]>('GET', '/v1/linked-patients'), [status?.canViewPatients, tick]);
   const [links] = useLinks();
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 15000); // live badges and new readings
+    return () => clearInterval(t);
+  }, []);
   if (!user) return null;
   const waiting = (links ?? []).filter((l) => l.awaitingMe).length;
   const needle = q.trim().toLowerCase().replace(/\s/g, '');
-  const shown = (patients ?? []).filter((p) => !needle || p.uniqueId.includes(needle) || (p.fullName ?? '').toLowerCase().replace(/\s/g, '').includes(needle));
+  const shown = (patients ?? [])
+    .filter((p) => !needle || p.uniqueId.includes(needle) || (p.fullName ?? '').toLowerCase().replace(/\s/g, '').includes(needle))
+    .sort((a, b) => activity(b) - activity(a));
+  const liveCount = (patients ?? []).filter((p) => p.ecgLive).length;
   return (
     <div className="stack" style={{ gap: 16 }}>
-      <IdCard uid={user.uniqueId} name={user.fullName} role={user.role} extra="Patients, doctors and clinics use this ID to send you link requests." />
       <SetupChecklist />
       {waiting > 0 && (
         <Banner kind="info">
@@ -32,12 +58,17 @@ export function ProDashboard() {
       )}
       <section className="card">
         <div className="row spread">
-          <h2>Patients</h2>
-          <input style={{ maxWidth: 280 }} placeholder="Search name or ID" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search patients" />
+          <div>
+            <h2 style={{ marginBottom: 2 }}>Latest recordings</h2>
+            <small className="muted">
+              {liveCount > 0 ? `${liveCount} ECG${liveCount > 1 ? 's' : ''} recording now · ` : ''}Newest activity first · refreshes every 15 s
+            </small>
+          </div>
+          <input style={{ maxWidth: 260 }} placeholder="Search name or ID" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search patients" />
         </div>
         {err && <p className="muted">{err}</p>}
         {!status?.canViewPatients ? (
-          <div className="empty">Your patient list appears here once your account is verified and two-step sign-in is on.</div>
+          <div className="empty">Your patients’ recordings appear here once your account is verified and two-step sign-in is on.</div>
         ) : patients && !patients.length ? (
           <div className="empty">No patients yet. Ask patients for their 16-digit ID and send a request under Links.</div>
         ) : (
@@ -46,10 +77,11 @@ export function ProDashboard() {
               <thead>
                 <tr>
                   <th>Patient</th>
-                  <th>ID</th>
-                  <th>Born</th>
+                  <th>Heart rate</th>
+                  <th>SpO₂</th>
+                  <th>Blood pressure</th>
+                  <th>Last ECG</th>
                   {user.role === 'clinic' && <th>Doctors</th>}
-                  <th>Last reading</th>
                   <th />
                 </tr>
               </thead>
@@ -58,13 +90,36 @@ export function ProDashboard() {
                   <tr key={p.patientId}>
                     <td>
                       <strong style={{ color: 'var(--heading)' }}>{p.fullName || 'Unnamed'}</strong>
+                      <div className="muted mono" style={{ fontSize: '0.8rem' }}>
+                        {formatId(p.uniqueId)}
+                        {p.dateOfBirth ? ` · born ${day(p.dateOfBirth)}` : ''}
+                      </div>
                     </td>
-                    <td className="mono">{formatId(p.uniqueId)}</td>
-                    <td>{day(p.dateOfBirth)}</td>
-                    {user.role === 'clinic' && <td>{p.doctors.length ? p.doctors.map((d) => d.name).join(', ') : <span className="muted">None</span>}</td>}
-                    <td title={when(p.lastMeasurementAt)}>{ago(p.lastMeasurementAt)}</td>
                     <td>
-                      <Link className="btn ghost small" to={`/patients/${p.patientId}`} state={p}>
+                      <LatestCell v={p.latest.hr} kind="hr" />
+                    </td>
+                    <td>
+                      <LatestCell v={p.latest.spo2} kind="spo2" />
+                    </td>
+                    <td>
+                      <LatestCell v={p.latest.bp} kind="bp" />
+                    </td>
+                    <td>
+                      {p.ecgLive ? (
+                        <span className={`pill ${p.ecgLive === 'live' ? 'error live-dot' : 'warn'}`}>● {p.ecgLive === 'live' ? 'Recording now' : 'Signal lost'}</span>
+                      ) : p.latestEcg ? (
+                        <span title={when(p.latestEcg.startedAt)}>
+                          {p.latestEcg.leadCount === 12 ? <span className="pill info">12-lead</span> : p.latestEcg.lead} {p.latestEcg.durationS.toFixed(0)} s
+                          <br />
+                          <small className="muted">{ago(p.latestEcg.startedAt)}</small>
+                        </span>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    {user.role === 'clinic' && <td>{p.doctors.length ? p.doctors.map((d) => d.name).join(', ') : <span className="muted">None</span>}</td>}
+                    <td>
+                      <Link className="btn ghost small" to={`/patients/${p.patientId}`}>
                         Open
                       </Link>
                     </td>
@@ -75,6 +130,7 @@ export function ProDashboard() {
           </div>
         )}
       </section>
+      <IdCard uid={user.uniqueId} name={user.fullName} role={user.role} extra="Patients, doctors and clinics use this ID to send you link requests." />
     </div>
   );
 }
@@ -82,12 +138,15 @@ export function ProDashboard() {
 export function PatientDetail() {
   const { patientId = '' } = useParams();
   const [patients] = useLoad(() => api<LinkedPatient[]>('GET', '/v1/linked-patients'), []);
+  const [showHistory, setShowHistory] = useState(false);
+  const [ecgKey, setEcgKey] = useState(0);
+  const onSaved = useCallback(() => setEcgKey((k) => k + 1), []);
   const p = patients?.find((x) => x.patientId === patientId);
   return (
     <div className="grid">
       <div className="span-12 row spread">
         <div>
-          <Link to="/">← Patients</Link>
+          <Link to="/">← Latest recordings</Link>
           <h1 style={{ marginTop: 8 }}>{p?.fullName ?? 'Patient'}</h1>
           {p && (
             <p className="muted mono">
@@ -95,23 +154,38 @@ export function PatientDetail() {
             </p>
           )}
         </div>
-        <span className="pill info">Read-only · every view is logged in the patient’s access log</span>
+        <span className="pill info">Every view is logged in the patient’s access log</span>
       </div>
+      <section className="card span-12">
+        <h2>Live ECG</h2>
+        <LiveEcg patientId={patientId} onSaved={onSaved} />
+      </section>
       <section className="card span-12">
         <h2>Latest readings</h2>
         <LatestVitals patientId={patientId} />
       </section>
       <section className="card span-12">
-        <h2>History</h2>
-        <History patientId={patientId} />
-      </section>
-      <section className="card span-6">
         <h2>ECG recordings</h2>
-        <EcgPanel patientId={patientId} />
+        <EcgPanel patientId={patientId} reloadKey={ecgKey} openLatest />
       </section>
-      <section className="card span-6">
-        <h2>Reports</h2>
-        <ReportsPanel patientId={patientId} />
+      <section className="card span-12">
+        <h2>Reports and documents</h2>
+        <DocumentsPanel patientId={patientId} />
+      </section>
+      <section className="card span-12">
+        <button type="button" className="btn ghost history-toggle" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}>
+          <span>History: trends, all readings and PDF reports</span>
+          <span aria-hidden="true">{showHistory ? '▴ Hide' : '▾ Show'}</span>
+        </button>
+        {showHistory && (
+          <div className="stack" style={{ marginTop: 16, gap: 24 }}>
+            <History patientId={patientId} />
+            <div>
+              <h3>Generated PDF reports</h3>
+              <ReportsPanel patientId={patientId} />
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

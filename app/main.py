@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.v1 import admin, audit, auth, devices, ecg, links, me, measurements, notifications, reports, sharing
+from app.api.v1 import admin, audit, auth, devices, documents, ecg, links, me, measurements, notifications, reports, sharing
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import install_error_handlers
@@ -62,6 +62,7 @@ def create_app() -> FastAPI:
         devices.router,
         measurements.router,
         ecg.router,
+        documents.router,
         sharing.router,
         links.router,
         notifications.router,

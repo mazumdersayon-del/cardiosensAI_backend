@@ -72,7 +72,7 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
 export async function apiBinary(path: string): Promise<{ data: ArrayBuffer; headers: Headers }> {
   let res = await raw('GET', path);
   if (res.status === 401 && (await refreshSession())) res = await raw('GET', path);
-  if (!res.ok) throw new ApiError(res.status, 'error', 'Could not load the waveform');
+  if (!res.ok) throw new ApiError(res.status, res.status === 410 ? 'session_ended' : 'error', 'Could not load the waveform');
   return { data: await res.arrayBuffer(), headers: res.headers };
 }
 
@@ -141,8 +141,28 @@ export interface Link {
   endedAt: string | null;
 }
 
+export interface LatestValue {
+  value: number | null;
+  systolic: number | null;
+  diastolic: number | null;
+  unit: string;
+  measuredAt: string;
+}
+
+export interface EcgBrief {
+  id: string;
+  startedAt: string;
+  lead: string;
+  leadCount: number;
+  durationS: number;
+  averageHr: number | null;
+}
+
 export interface LinkedPatient {
   patientId: string;
+  latest: Partial<Record<'hr' | 'spo2' | 'bp', LatestValue>>;
+  latestEcg: EcgBrief | null;
+  ecgLive: 'live' | 'stalled' | null;
   uniqueId: string;
   fullName: string | null;
   dateOfBirth: string | null;
@@ -177,6 +197,9 @@ export interface EcgRecording {
   startedAt: string;
   durationS: number;
   lead: string;
+  leads: string[];
+  sampleCount: number;
+  acquisition: string;
   sampleRateHz: number;
   averageHr: number | null;
   quality: string;
@@ -209,4 +232,73 @@ export interface ProfessionalProfile {
   council: string;
   specialty: string | null;
   verificationStatus: 'pending' | 'verified' | 'rejected';
+}
+
+export interface EcgLive {
+  id: string;
+  patientId: string;
+  state: 'live' | 'stalled' | 'stopped';
+  leads: string[];
+  sampleRateHz: number;
+  calibration: { mmPerMv: number; mmPerSec: number };
+  startedAt: string;
+  lastChunkAt: string | null;
+  frames: number;
+  durationS: number;
+  averageHr: number | null;
+  recordingId: string | null;
+}
+
+export interface EcgLiveStatus {
+  live: EcgLive | null;
+  lastRecording: EcgRecording | null;
+}
+
+export interface DocumentFile {
+  id: string;
+  filename: string;
+  contentType: 'application/pdf' | 'image/jpeg';
+  sizeBytes: number;
+}
+
+export interface DocComment {
+  id: string;
+  authorName: string | null;
+  authorRole: string | null;
+  body: string;
+  createdAt: string;
+  mine: boolean;
+}
+
+export interface MedDocument {
+  id: string;
+  patientId: string;
+  title: string;
+  category: string;
+  documentDate: string | null;
+  note: string | null;
+  uploaderName: string | null;
+  uploaderRole: string;
+  createdAt: string;
+  files: DocumentFile[];
+  comments: DocComment[];
+  canDelete: boolean;
+  canComment: boolean;
+}
+
+/** multipart/form-data upload (the browser sets the boundary). */
+export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const send = () => {
+    const headers: Record<string, string> = { 'X-CS-Web': '1' };
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    return fetch(path, { method: 'POST', headers, body: form, credentials: 'same-origin' });
+  };
+  let res = await send();
+  if (res.status === 401 && (await refreshSession())) res = await send();
+  const data = await parse(res);
+  if (!res.ok) {
+    const err = (data as { error?: { code?: string; message?: string } } | null)?.error;
+    throw new ApiError(res.status, err?.code ?? 'error', err?.message ?? `Upload failed (${res.status})`);
+  }
+  return data as T;
 }

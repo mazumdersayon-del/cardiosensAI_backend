@@ -18,11 +18,12 @@ Patients, doctors and clinics are identified and linked by a **16-digit Cardiose
 | **Sign-in** | One login page for every role: email + password (argon2id, 10+ characters, common-password check, 5 failures lock the account for 15 min). Email confirmation and password reset by single-use emailed links. TOTP second factor, **required for doctors, clinics and staff**. 15-minute access tokens, rotating refresh tokens with reuse detection; the web app keeps its refresh token in an httpOnly SameSite=Strict cookie. The app's SMS one-time code still works |
 | **Accounts** | Patient, doctor, clinic (self sign-up, role chosen on the form) and admin (CardiosensAI staff). Every account has a **16-digit ID**: role digit (1 patient, 2 doctor, 3 clinic, 9 staff) + 14 random digits + Luhn check digit. A clinic is an organisation with its own ID and, in v1, one login |
 | **Links** | Patient↔doctor, patient↔clinic and doctor↔clinic, made by typing the other's 16-digit ID. Both sides approve (the requester's side on request), so the patient approves every patient link. An active patient link gives full, revocable access through an access grant; ending it stops access at once. A clinic's link doesn't extend to its doctors. A clinic can ask a patient to link with one of its doctors. Doctors and clinics must be verified by staff **and** use two-step sign-in before they can link or see anything |
-| **Web app** | React SPA at `/`: the sign-in page, or the signed-in role's dashboard (patient home, doctor/clinic patient lists, clinic doctor roster, staff verification queue). Light and dark themes |
+| **Web app** | React SPA at `/`: the sign-in page, or the signed-in role's dashboard. Doctor/clinic home leads with **latest recordings** (newest readings, last ECG, live badge) across linked patients; a patient's page starts with the live ECG, latest readings, newest ECG and documents, with **History behind a button**. Light and dark themes |
 | **Devices** | Device models declare exactly which vitals they may provide. One active owner per physical device (model + serial). The app's own device id (`clientRef`) is accepted |
 | **Readings** | `POST /v1/measurements:batch` is idempotent and returns an outcome per item. Plausibility, unit, timestamp and device-capability checks run on every item. Simulated readings and glucose control-solution tests are refused. Readings dated before the device was registered are refused |
 | **History** | Keyset-paginated queries that keep each reading's original UTC offset, plus latest-per-vital |
-| **ECG** | Metadata in PostgreSQL. Raw int16 samples go to object storage with a SHA-256 integrity check, and are served only after a permission check |
+| **ECG** | Single-lead and **12-lead** recordings (interleaved int16 frames) shown in the standard 3×4 layout with a lead II rhythm strip. **Live ECG**: the device streams ~1 s chunks; doctors see a live status and live 12-lead trace, and the session becomes a normal recording when it stops. Samples are in object storage with a SHA-256 check, served only after a permission check |
+| **Documents** | Patients and linked doctors/clinics upload lab reports, prescriptions and scans: several **PDF or JPEG** files per document (checked by content). Linked **doctors comment**; everyone with access sees the thread. Files open through 10-minute signed links |
 | **Sharing** | Patient-created grants: chosen vitals, history window (`from_now`, `last_30_days`, `all`), downloads on/off, notices, expiry. Single-use hashed invite tokens. Revocation is immediate, including report links already issued |
 | **Reports** | PDF built in the background (reportlab) and downloadable only through 10-minute signed links bound to one user. Permission is re-checked on every download |
 | **Audit** | Append-only trail of logins, sharing changes, viewer reads, downloads and admin actions. Values are never logged. Patients see an access log |
@@ -62,6 +63,7 @@ The demo doctor and clinic are verified and already linked to the demo patient. 
 | `bash scripts/run_local.sh --no-demo` | Don't create the demo patient, doctor and clinic |
 | `bash scripts/run_local.sh --port 8001` | Run the API on another port |
 | `bash scripts/run_local.sh totp` | Print the current 6-digit code for the demo doctor and clinic |
+| `bash scripts/run_local.sh ecg-live [S]` | Stream a synthetic 12-lead **live ECG** for the demo patient for S seconds (default 120, `0` = until Ctrl+C) to the running API (`PORT=8010 ...` for another port). Sign in as the demo doctor to watch it; it is saved as a recording when it stops |
 | `bash scripts/run_local.sh stop` | Stop the database container (its data is kept) |
 | `PG_PORT=55500 bash scripts/run_local.sh` | Use another host port for PostgreSQL (default 55433) |
 
@@ -103,7 +105,7 @@ cd web && npm test && npm run typecheck
 
 \* Create the test database once: `docker exec cardiosens-local-pg createdb -U cardiosens cardiosens_test`. Tests wipe it.
 
-The 55 tests cover email sign-up, confirmation, lockout, password reset and the web session cookie; 16-digit IDs; patient/doctor/clinic linking (approval, verification and two-step gates, clinic roster, requests on a doctor's behalf, ending a link); moving app accounts to email; SMS sign-in, refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, admin isolation from health data, ECG integrity, signed report links, account deletion and the web app serving. `cd web && npm test` checks the client-side ID validation.
+The 64 tests cover 12-lead uploads, live ECG streaming/viewing/saving and stall handling, document uploads (types, limits, permissions, comments, signed links), the dashboard summary, email sign-up, confirmation, lockout, password reset and the web session cookie; 16-digit IDs; patient/doctor/clinic linking (approval, verification and two-step gates, clinic roster, requests on a doctor's behalf, ending a link); moving app accounts to email; SMS sign-in, refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, admin isolation from health data, ECG integrity, signed report links, account deletion and the web app serving. `cd web && npm test` checks the client-side ID validation.
 
 Before merging a change that touches models, also run `alembic check` against a migrated PostgreSQL database (no output = models and migrations agree).
 
@@ -256,8 +258,56 @@ The older invite-based sharing (`/v1/grants`, `/v1/invites/accept`) remains for 
 1. The device sends a reading to the phone over BLE; the app parses the standard profile and creates a `Measurement` with a stable `id`, queued offline.
 2. `POST /v1/measurements:batch` (≤100 items) validates each item (unit, plausibility, timestamp skew, device capability, registration date) and stores it once: unique `(patient_id, client_id)` plus a content hash makes retries idempotent. Each item gets its own outcome; rejections keep only a reason code (`ingestion_rejections`).
 3. Simulated readings and glucose control-solution tests are refused by design.
-4. ECG metadata goes to `ecg_recordings`; raw int16 samples to storage with a SHA-256 that is verified on every read (`/samples` streams them after the permission check).
+4. ECG metadata goes to `ecg_recordings`; raw int16 samples to storage with a SHA-256 that is verified on every read (`/samples` streams them after the permission check). Multi-lead recordings list their channels in `leads` (standard names I, II, III, aVR, aVL, aVF, V1–V6) and store **interleaved frames** (`frame k = [lead0, lead1, …]`); `sample_count` counts frames. The `X-Leads` header tells clients the order.
 5. History is keyset-paginated and keeps each reading's original UTC offset.
+
+### Live ECG
+
+```mermaid
+sequenceDiagram
+  participant D as Device / app (patient)
+  participant API
+  participant V as Doctor's browser
+  D->>API: POST /v1/ecg-live {leads, sampleRateHz, deviceId}
+  loop every ~1 s
+    D->>API: POST /v1/ecg-live/{id}/chunks {seq, samplesBase64}
+  end
+  loop every 2 s
+    V->>API: GET /v1/patients/{pid}/ecg-live (live | stalled | none + last recording)
+  end
+  loop every 1 s while live
+    V->>API: GET /v1/ecg-live/{id}/samples?fromFrame=N
+  end
+  D->>API: POST /v1/ecg-live/{id}/stop
+  API-->>V: status shows "not recording"; the new recording tops the list
+```
+
+- **Storage while live:** chunks are rows in `ecg_live_chunks` (12 leads × 500 Hz ≈ 12 KB/s), unique on `(session, seq)` so a retried chunk is ignored. Stopping joins them in `seq` order into one stored file, creates an `ecg_recordings` row (`acquisition = live`) and deletes the chunks (`services/ecg.finalize`).
+- **States:** `live` (data within 5 s), `stalled` (shown as "Signal lost"), and after 2 minutes without data the session is saved automatically on the next status check. Starting a new session saves any previous one.
+- **Why polling:** no WebSocket means no nginx or systemd changes and it works through any proxy; viewers never get more than the last 10 s, so a slow viewer jumps forward instead of lagging.
+- **Access log:** viewers poll every second, so each viewer gets one `ecg.live_view` entry per session, not one per poll.
+- **No device streams yet.** `app/scripts/simulate_ecg.py` (`run_local.sh ecg-live`) signs in as a patient through the public API and streams a synthetic 12-lead tracing from `services/ecg_synth.py` (sums of Gaussian waves, limb leads derived by Einthoven/Goldberger, labelled synthetic everywhere).
+
+### Documents
+
+`app/api/v1/documents.py`. One document = title, type (`lab`, `prescription`, `imaging`, `discharge`, `ecg`, `other`), optional date and note, **1–10 files** (each ≤ 15 MB, ≤ 50 MB together; nginx allows 55 MB bodies), and a comment thread.
+
+| | Patient | Linked doctor | Linked clinic | Family share / others |
+|---|---|---|---|---|
+| See, download | ✓ | ✓ | ✓ | ✗ (404) |
+| Upload | ✓ | ✓ | ✓ | ✗ |
+| Comment | — | ✓ | — | ✗ |
+| Delete document | Any of theirs | Own uploads | Own uploads | ✗ |
+| Delete comment | — | Own | — | — |
+
+- File type is decided by the **content signature** (`%PDF-`, `FF D8 FF`), never by name or the browser's type; names are reduced to a safe base name with the matching extension.
+- Stored at `documents/{patient}/{document}/{file}.{pdf|jpg}` with SHA-256, checked on every read.
+- Viewing: `POST …/files/{id}/link` returns a 10-minute signed URL bound to the user; opening it re-checks permission and writes `document.view` to the patient's access log. JPEGs get a sandboxing CSP; PDFs open in the browser's viewer.
+- Doctor or clinic uploads and doctor comments notify the patient. Deleting a document removes its files; account deletion removes all of the patient's documents.
+
+### Doctor dashboard
+
+`GET /v1/linked-patients` returns, per approved patient, the newest `hr`, `spo2` and `bp`, the last ECG (leads, length, HR) and the live state. The web app sorts by newest activity (live first) and refreshes every 15 s. Reading these values is health-data access, so it is logged as `dashboard.summary`, at most once an hour per viewer and patient.
 
 ### Reports
 
@@ -269,8 +319,8 @@ The older invite-based sharing (`/v1/grants`, `/v1/invites/accept`) remains for 
 |---|---|---|
 | Entry, routes | `src/main.tsx`, `src/App.tsx` | React Router. `/` = sign-in or the role's home. `/links`, `/doctors`, `/patients/:id`, `/settings`, `/admin/users`, `/register`, `/verify-email`, `/forgot-password`, `/reset-password` |
 | Session | `src/auth.tsx`, `src/api.ts` | On load calls `/v1/auth/refresh` (cookie) to restore the session; a 401 triggers one silent refresh. Access token only in memory |
-| Screens | `src/pages/*` | `PatientHome`, `ProDashboard` (doctor/clinic list, patient detail, clinic doctors), `LinksPage`, `Settings`, `Admin`, `AuthPages` |
-| Components | `src/components/*` | ID card with QR, vitals + SVG trend chart (gaps never interpolated), ECG strip on 25 mm/s × 10 mm/mV paper, reports, link tables, TOTP setup, setup checklist |
+| Screens | `src/pages/*` | `PatientHome`, `ProDashboard` (latest-recordings dashboard, patient detail with collapsible History, clinic doctors), `LinksPage`, `Settings`, `Admin`, `AuthPages` |
+| Components | `src/components/*` | Phone input (country-code dropdown with flags, India default, stores E.164; data and rules in `src/countries.ts`), ID card with QR, vitals + SVG trend chart (gaps never interpolated), ECG viewer (12-lead 3×4 + rhythm strip or per-lead strips, 25 mm/s × 10 mm/mV paper, calibration pulse, 10 s pages) and live ECG panel (`Ecg.tsx`), documents with uploads, previews and comments (`Documents.tsx`), reports, link tables, TOTP setup, setup checklist |
 | Theme | `src/theme.css` | Light palette from the patient app, dark from the V1.0 site; follows the OS, toggle stored in `localStorage` |
 
 The build output is committed in `website/` (hashed assets cached for a year, `index.html` revalidated on every load), so servers need no Node.js. `app/website.py` adds security headers: a Content-Security-Policy that allows only same-origin scripts (plus the hash of the inline theme script) and same-origin API calls, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: same-origin`, and a Permissions-Policy.
@@ -362,7 +412,7 @@ erDiagram
   }
 ```
 
-Also present: `device_models`, `ecg_recordings` (storage key + SHA-256), `otp_challenges`, `refresh_tokens`, `action_tokens`, `invites`, `reports`, `consents`, `notifications`, `ingestion_rejections` (reason codes only) and `audit_events` (never health values).
+Also present: `device_models`, `ecg_recordings` (storage key + SHA-256, `leads`), `ecg_live_sessions` + `ecg_live_chunks`, `documents` + `document_files` + `document_comments`, `otp_challenges`, `refresh_tokens`, `action_tokens`, `invites`, `reports`, `consents`, `notifications`, `ingestion_rejections` (reason codes only) and `audit_events` (never health values).
 
 **Indexes:** `measurements(patient_id, vital, measured_at)` for history, unique `(patient_id, client_id)` for idempotency, partial unique `(model_id, serial) WHERE status='active'` for device ownership, `audit_events(patient_id, at)`, and `care_links` by patient, doctor and organisation.
 
@@ -372,6 +422,7 @@ Also present: `device_models`, `ecg_recordings` (storage key + SHA-256), `otp_ch
 |---|---|
 | `0001` | Initial schema (phone sign-in, grants, readings, ECG, reports, audit) |
 | `0002` | Email + password, `organizations`, `care_links`, `action_tokens`, 16-digit IDs back-filled for every user, caregivers → patients, phone optional, unique lower-case email. Downgrade refuses if email-only accounts exist |
+| `0003` | `ecg_recordings.leads` (back-filled with each recording's lead), live ECG tables, document tables |
 
 `alembic upgrade head` applies them (`run_local.sh` and `deploy.sh` do it for you). After changing models: `alembic revision --autogenerate -m "..."`, review the file, then check with `alembic check` against PostgreSQL. The two foreign keys that close the users↔organizations cycle are named (`fk_organizations_owner`, `fk_organizations_verified_by`) so `drop_all` works.
 
@@ -387,6 +438,8 @@ Interactive docs at `/docs` (disabled when `ENV=production`); the full spec is `
 | Me | `GET/PATCH/DELETE /v1/me`, `/me/consents`, `/me/professional-profile` (doctor), `/me/organization` (clinic), `/me/export`, `/me/access-log` |
 | Links | `GET /v1/directory/{id}`, `GET/POST /v1/links`, `POST /v1/links/{id}/approve|decline|end`, `GET /v1/linked-patients`, `GET /v1/clinic/doctors` |
 | Health data | `POST /v1/measurements:batch`, `GET /v1/patients/{id}/measurements[/latest]`, `POST /v1/ecg-recordings`, `GET /v1/patients/{id}/ecg-recordings`, `GET /v1/ecg-recordings/{id}[/samples]` (`{id}` may be `me`) |
+| Live ECG | `POST /v1/ecg-live`, `POST /v1/ecg-live/{id}/chunks`, `POST /v1/ecg-live/{id}/stop` (patient's device); `GET /v1/patients/{id}/ecg-live`, `GET /v1/ecg-live/{id}/samples?fromFrame=N` (viewers) |
+| Documents | `POST/GET /v1/patients/{id}/documents` (multipart upload: `files`, `title`, `category`, `documentDate`, `note`), `DELETE /v1/documents/{id}`, `POST /v1/documents/{id}/comments`, `DELETE /v1/documents/{id}/comments/{cid}`, `POST /v1/documents/{id}/files/{fid}/link`, `GET /v1/documents/files/{token}` |
 | Devices | `GET /v1/device-models`, `GET/POST /v1/devices`, `PATCH /v1/devices/{id}/status`, `DELETE /v1/devices/{id}` |
 | Family sharing | `GET/POST /v1/grants`, `POST /v1/grants/{id}/revoke`, `POST /v1/invites/accept`, `GET /v1/shared-with-me` |
 | Reports | `POST/GET /v1/reports`, `GET /v1/reports/{id}`, `POST /v1/reports/{id}/download-link`, `GET /v1/reports/download/{token}` |
@@ -411,6 +464,7 @@ All settings are environment variables (`app/core/config.py`; locally `.env`, se
 | `DEV_EXPOSE_OTP` | `false` | Development only: return SMS codes in the API response |
 | `STORAGE_BACKEND`, `STORAGE_LOCAL_PATH`, `S3_*` | `local`, `./var/storage` | Where ECG waveforms and PDFs go |
 | `CORS_ORIGINS` | `[]` | Only needed for a web client on another origin (the built-in web app is same-origin) |
+| Documents | `MAX_DOCUMENT_FILES` 10, `MAX_DOCUMENT_FILE_BYTES` 15 MB, `MAX_DOCUMENT_UPLOAD_BYTES` 50 MB, `DOCUMENT_LINK_TTL_S` 600 | Upload limits (nginx `client_max_body_size 55m` must stay above the total) |
 | Lifetimes and limits | see `config.py` | `ACCESS_TOKEN_TTL_S` 900, `REFRESH_TOKEN_TTL_S` 30 d, `EMAIL_VERIFY_TTL_S` 24 h, `PASSWORD_RESET_TTL_S` 1 h, `LOGIN_MAX_FAILURES` 5, `LOGIN_LOCKOUT_S` 900, `MAX_BATCH_SIZE` 100 |
 
 ## Connecting the mobile app
@@ -627,13 +681,14 @@ app/
   main.py                FastAPI app: middleware, error handlers, /v1 routers, then the web app mount (last)
   website.py             serves website/ at / with SPA fallback, cache headers and CSP
   api/deps.py            current user, role guards (admin needs TOTP), request metadata
-  api/v1/                auth, me, links, devices, measurements, ecg, sharing, notifications, reports, audit, admin
+  api/v1/                auth, me, links, devices, measurements, ecg (+ live), documents, sharing, notifications, reports, audit, admin
   core/                  config (+ production guards), db, security, ids, passwords (+ common_passwords.txt), errors, storage, ratelimit, observability
   models/                user (users, organizations, professional_profiles, consents), link, sharing, auth, device, health, report, notification, audit
   schemas/               request/response models (camelCase)
-  services/              authz, accounts, ingestion, report_pdf, audit, notifications, email, sms, serializers
-  scripts/seed.py        device models, admin by phone or email, demo data
-alembic/                 migrations (0001 initial, 0002 email/roles/links)
+  services/              authz, accounts, ecg (leads, live state, finalize), ecg_synth, ingestion, report_pdf, audit, notifications, email, sms, serializers
+  scripts/seed.py        device models, admin by phone or email, demo data (incl. a 12-lead ECG)
+  scripts/simulate_ecg.py  streams a synthetic 12-lead live ECG through the public API
+alembic/                 migrations (0001 initial, 0002 email/roles/links, 0003 12-lead/live ECG/documents)
 tests/                   pytest suite (conftest helpers: login, enable_mfa, make_admin, reading)
 web/                     web app source (React 19 + Vite + TypeScript)
 website/                 web app build, committed, served at /

@@ -29,6 +29,7 @@ pydantic-settings==2.15.0  # via cardiosensai-backend (pyproject.toml)
 pyjwt==2.15.1             # via cardiosensai-backend (pyproject.toml)
 pyotp==2.10.0             # via cardiosensai-backend (pyproject.toml)
 python-dotenv==1.2.4      # via pydantic-settings, uvicorn
+python-multipart==0.0.32  # via cardiosensai-backend (pyproject.toml)
 pyyaml==6.0.3             # via uvicorn
 reportlab==5.0.1          # via cardiosensai-backend (pyproject.toml)
 sqlalchemy==2.1.4         # via alembic, cardiosensai-backend (pyproject.toml)

@@ -132,7 +132,7 @@ EOF
     cat <<EOF
 
     server_tokens off;
-    client_max_body_size 10m;   # ECG uploads (10 min at 1 kHz) are ~1.6 MB
+    client_max_body_size 55m;   # document uploads: up to 10 files, 50 MB together (app limit); ECG uploads ~1.6 MB
     gzip on;
     gzip_types text/css application/javascript image/svg+xml;   # site files only; API JSON stays uncompressed
 

@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import { useAuth } from '../auth';
 import { ThemeButton } from '../components/Layout';
+import PhoneInput from '../components/PhoneInput';
 import { Banner, errorText } from '../components/ui';
 
 function AuthShell({ title, children, sub }: { title: string; sub?: ReactNode; children: ReactNode }) {
@@ -181,7 +182,9 @@ export function RegisterPage() {
         {field('password', 'Password', { type: 'password', required: true, minLength: 10, autoComplete: 'new-password' }, 'At least 10 characters. Avoid common passwords.')}
         {field('password2', 'Repeat password', { type: 'password', required: true, autoComplete: 'new-password' })}
         {role === 'patient' && field('dob', 'Date of birth', { type: 'date', max: new Date().toISOString().slice(0, 10) })}
-        {role !== 'clinic' && field('phone', 'Mobile (optional)', { type: 'tel', placeholder: '+919812345678', pattern: '\\+[1-9]\\d{7,14}' }, 'International format, starting with +91')}
+        {role !== 'clinic' && (
+          <PhoneInput label="Mobile (optional)" value={f.phone ?? ''} onChange={(v) => setF((x) => ({ ...x, phone: v }))} />
+        )}
         {role === 'doctor' && (
           <>
             {field('reg', 'Medical registration number', { required: true, minLength: 3 })}
@@ -195,7 +198,7 @@ export function RegisterPage() {
             {field('address', 'Address', { required: true, minLength: 3 })}
             {field('city', 'City', { required: true, minLength: 2 })}
             {field('reg', 'Clinical establishment registration / licence number', { required: true, minLength: 3 })}
-            {field('clinicPhone', 'Clinic phone', { type: 'tel', required: true, placeholder: '+913340001111', pattern: '\\+[1-9]\\d{7,14}' })}
+            <PhoneInput label="Clinic phone" value={f.clinicPhone ?? ''} onChange={(v) => setF((x) => ({ ...x, clinicPhone: v }))} required />
           </>
         )}
         {err && <Banner kind="error">{err}</Banner>}

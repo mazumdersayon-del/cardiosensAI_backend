@@ -107,8 +107,9 @@ def ecg_out(e: EcgRecording) -> EcgOut:
         client_id=e.client_id,
         device_id=str(e.device_id) if e.device_id else None,
         started_at=iso_with_offset(e.started_at, e.utc_offset_min),
-        duration_s=round(e.sample_count / e.sample_rate_hz, 3),
+        duration_s=round(e.sample_count / e.sample_rate_hz, 3),  # sample_count = frames
         lead=e.lead,
+        leads=list(e.leads or [e.lead]),
         sample_rate_hz=e.sample_rate_hz,
         sample_count=e.sample_count,
         sample_format=e.sample_format,

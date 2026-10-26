@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom';
 import { useAuth } from '../auth';
-import EcgPanel from '../components/Ecg';
+import { useCallback, useState } from 'react';
+import DocumentsPanel from '../components/Documents';
+import EcgPanel, { LiveEcg } from '../components/Ecg';
 import IdCard from '../components/IdCard';
 import { LinksTable, useLinks } from '../components/Links';
 import ReportsPanel from '../components/Reports';
@@ -11,6 +13,8 @@ import { day } from '../format';
 export default function PatientHome() {
   const { user } = useAuth();
   const [links, , reloadLinks] = useLinks();
+  const [ecgKey, setEcgKey] = useState(0);
+  const onSaved = useCallback(() => setEcgKey((k) => k + 1), []);
   if (!user) return null;
   const waiting = (links ?? []).filter((l) => l.awaitingMe);
   const team = (links ?? []).filter((l) => l.status === 'active');
@@ -60,12 +64,20 @@ export default function PatientHome() {
         <h2>History</h2>
         <History patientId="me" />
       </section>
-      <section className="card span-6">
+      <section className="card span-12">
         <h2>ECG recordings</h2>
-        <EcgPanel patientId="me" />
+        <div className="stack">
+          <LiveEcg patientId="me" onSaved={onSaved} hideWhenIdle />
+          <EcgPanel patientId="me" reloadKey={ecgKey} />
+        </div>
       </section>
-      <section className="card span-6">
-        <h2>Reports</h2>
+      <section className="card span-12">
+        <h2>Reports and documents</h2>
+        <p className="muted" style={{ marginTop: -4 }}>
+          Upload lab reports, prescriptions and scans (PDF or JPEG). Your linked doctors and clinics can see them, add their own and comment.
+        </p>
+        <DocumentsPanel patientId="me" />
+        <h3 style={{ marginTop: 24 }}>Generated PDF report of your readings</h3>
         <ReportsPanel patientId="me" />
       </section>
     </div>

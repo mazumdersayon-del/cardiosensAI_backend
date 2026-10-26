@@ -3,7 +3,8 @@
 from app.models.audit import AuditEvent
 from app.models.auth import ActionToken, OtpChallenge, RefreshToken
 from app.models.device import Device, DeviceModel
-from app.models.health import EcgRecording, IngestionRejection, Measurement
+from app.models.document import Document, DocumentComment, DocumentFile
+from app.models.health import EcgLiveChunk, EcgLiveSession, EcgRecording, IngestionRejection, Measurement
 from app.models.link import CareLink
 from app.models.notification import Notification
 from app.models.report import Report
@@ -18,6 +19,11 @@ __all__ = [
     "Consent",
     "Device",
     "DeviceModel",
+    "Document",
+    "DocumentComment",
+    "DocumentFile",
+    "EcgLiveChunk",
+    "EcgLiveSession",
     "EcgRecording",
     "IngestionRejection",
     "Invite",

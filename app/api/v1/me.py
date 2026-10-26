@@ -15,6 +15,11 @@ from app.models import (
     CareLink,
     Consent,
     Device,
+    Document,
+    DocumentComment,
+    DocumentFile,
+    EcgLiveChunk,
+    EcgLiveSession,
     EcgRecording,
     Invite,
     Measurement,
@@ -199,6 +204,8 @@ def delete_me(user: User = Depends(get_current_user), db: Session = Depends(get_
     storage = get_storage()
     keys = [k for k in db.scalars(select(EcgRecording.storage_key).where(EcgRecording.patient_id == user.id))]
     keys += [k for k in db.scalars(select(Report.storage_key).where(Report.patient_id == user.id)) if k]
+    doc_ids = select(Document.id).where(Document.patient_id == user.id)
+    keys += [k for k in db.scalars(select(DocumentFile.storage_key).where(DocumentFile.document_id.in_(doc_ids))) if k]
     grant_ids = select(AccessGrant.id).where(AccessGrant.patient_id == user.id)
     db.execute(delete(Invite).where(Invite.grant_id.in_(grant_ids)))
     db.execute(
@@ -212,7 +219,14 @@ def delete_me(user: User = Depends(get_current_user), db: Session = Depends(get_
         .values(status="revoked", revoked_at=now)
     )
     db.execute(delete(Measurement).where(Measurement.patient_id == user.id))
+    db.execute(
+        delete(EcgLiveChunk).where(EcgLiveChunk.session_id.in_(select(EcgLiveSession.id).where(EcgLiveSession.patient_id == user.id)))
+    )
+    db.execute(delete(EcgLiveSession).where(EcgLiveSession.patient_id == user.id))
     db.execute(delete(EcgRecording).where(EcgRecording.patient_id == user.id))
+    db.execute(delete(DocumentComment).where(DocumentComment.document_id.in_(doc_ids)))
+    db.execute(delete(DocumentFile).where(DocumentFile.document_id.in_(doc_ids)))
+    db.execute(delete(Document).where(Document.patient_id == user.id))
     db.execute(update(Report).where(Report.patient_id == user.id).values(status="deleted", storage_key=None))
     db.execute(update(Device).where(Device.patient_id == user.id, Device.status == "active").values(status="retired", retired_at=now))
     db.execute(delete(Notification).where(Notification.user_id == user.id))
