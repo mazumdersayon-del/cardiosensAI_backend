@@ -5,7 +5,7 @@ Condensed context. README.md is the full reference (architecture, data model, AP
 ## What this is
 FastAPI + PostgreSQL API (`/v1`) and a React SPA (`/`) in one deployable. Roles: **patient, doctor, clinic** (self sign-up) + **admin** (staff). Everyone has a **16-digit ID** (role digit 1/2/3/9 + 14 random + Luhn). Health data. Not for clinical use. Production runs on one Ubuntu 26.04 server with **real users**.
 
-## Commands
+## Commands (every script and option: README → "Scripts")
 ```bash
 bash scripts/run_local.sh [--dev] [--reset]        # Docker PG :55433 + migrations + demo data + API :8000 (+ Vite :5173)
 bash scripts/run_local.sh totp                     # demo doctor/clinic TOTP code; demo password cardiosens-demo-2026
@@ -44,7 +44,7 @@ Done = ruff clean + pytest green (ideally also on PG) + web typecheck/test/build
 - After changing `web/`, commit the rebuilt `website/` too (servers have no Node).
 
 ## Deploy (README "Deploying")
-`git pull && sudo bash scripts/deploy.sh` on the server. Production needs SMTP vars in `/etc/cardiosensai/backend.env`; deploy dumps the DB before pending migrations. `nginx.sh` handles nginx + Let's Encrypt for `app.cardiosens.ai`. Never run demo mode or demo data against production. Don't deploy, push or run migrations on the server without the user's go-ahead.
+`git pull && sudo bash scripts/deploy.sh` on the server. Production needs SMTP vars in `/etc/cardiosensai/backend.env`; deploy dumps the DB before pending migrations. `nginx.sh` handles nginx + Let's Encrypt for `app.cardiosens.ai`; `sudo bash scripts/update_ssl.sh [--check|--force|--dry-run]` creates/checks/renews the certificate (certbot.timer renews automatically). Never run demo mode or demo data against production. Don't deploy, push or run migrations on the server without the user's go-ahead.
 
 ## Related
 - Patient app: `../cardioSE-WEB` (Expo; still uses phone OTP — `/v1/auth/otp/*` must keep working).

@@ -9,7 +9,7 @@ Patients, doctors and clinics are identified and linked by a **16-digit Cardiose
 
 > **Status: 0.2, pre-production. Not for clinical use.** No clinical validation, legal compliance or medical-device certification is claimed. See [Before production](#before-production).
 
-**Contents:** [What it does](#what-it-does) · [Running locally](#running-locally-run_localsh) · [Architecture](#architecture) · [Data model](#data-model) · [API overview](#api-overview) · [Configuration](#configuration) · [Connecting the mobile app](#connecting-the-mobile-app) · [Deploying](#deploying-to-a-server-deploysh) · [nginx and HTTPS](#nginx-and-https-nginxsh) · [Dependencies](#dependencies) · [Before production](#before-production) · [Repository layout](#repository-layout)
+**Contents:** [What it does](#what-it-does) · [Scripts](#scripts) · [Running locally](#running-locally) · [Architecture](#architecture) · [Data model](#data-model) · [API overview](#api-overview) · [Configuration](#configuration) · [Connecting the mobile app](#connecting-the-mobile-app) · [Deploying](#deploying-to-a-server) · [Dependencies](#dependencies) · [Before production](#before-production) · [Repository layout](#repository-layout)
 
 ## What it does
 
@@ -30,9 +30,253 @@ Patients, doctors and clinics are identified and linked by a **16-digit Cardiose
 | **Admin** | Users (masked phone and email), suspension, doctor and clinic verification, moving app accounts to email sign-in, device models, ops dashboard and audit search. Requires two-step sign-in. Admins get **no** health data |
 | **Privacy** | Data export (JSON) and account deletion (health data removed; audit and consent records kept) |
 
-## Running locally (`run_local.sh`)
+## Scripts
 
-All three shell scripts live in `scripts/` and are run with `bash scripts/<name>.sh` from the repository root. They locate the repository themselves, so `bash /path/to/cardiosensAI_backend/scripts/<name>.sh` also works from any directory.
+Every operational task has a script. This section is the reference for all of them; the walkthroughs in [Running locally](#running-locally) and [Deploying to a server](#deploying-to-a-server) show them in context.
+
+| Script | Runs on | Needs | Purpose |
+|---|---|---|---|
+| [`scripts/run_local.sh`](#scriptsrun_localsh) | Your machine | Docker, Node 20+ | Whole stack locally: PostgreSQL + API + web app + demo data; demo TOTP codes; live ECG simulator |
+| [`scripts/deploy.sh`](#scriptsdeploysh) | Ubuntu 26.04 server | root | Install or update everything on the server: PostgreSQL, Python, service, nginx, HTTPS, backups, firewall, migrations |
+| [`scripts/nginx.sh`](#scriptsnginxsh) | Server | root | nginx site + Let's Encrypt certificate (run by `deploy.sh`, or alone) |
+| [`scripts/update_ssl.sh`](#scriptsupdate_sslsh) | Server | root | Create, check or renew the HTTPS certificate |
+| [`app/scripts/seed.py`](#appscriptsseedpy) | Either | database settings | Device models, staff accounts, demo data |
+| [`app/scripts/simulate_ecg.py`](#appscriptssimulate_ecgpy) | Either | a running API | Stream a synthetic 12-lead live ECG through the public API |
+| [Web app (`npm run …`)](#web-app-npm-scripts) | Your machine | Node 20+ | Dev server, tests, typecheck, production build |
+| [Database and checks](#database-and-checks) | Either | `.venv` | Migrations, tests, lint, API spec |
+
+**Conventions for the shell scripts:**
+
+- Run them with `bash scripts/<name>.sh` from the repository root. They find the repository themselves, so `bash /path/to/cardiosensAI_backend/scripts/<name>.sh` works from any directory.
+- `--help` prints the built-in help (the same text as the top of the file).
+- Server scripts must run as root (`sudo bash …`); they refuse otherwise.
+- Most options can also be given as environment variables (shown in brackets below), e.g. `DOMAIN=app.cardiosens.ai sudo -E bash scripts/nginx.sh`.
+- The server scripts share remembered settings in `/etc/cardiosensai/deploy.env` (domain, Let's Encrypt email, mode, workers), so after the first run they need no options.
+- They stop at the first error and print the failing line (`deploy.sh: failed at line N: …`).
+
+### `scripts/run_local.sh`
+
+Starts the whole stack on your machine for development: PostgreSQL 17 in Docker, migrations, demo data, the API with auto-reload and the web app on **http://localhost:8000**. Development settings only (dev secrets, SMS codes in API responses, emails printed to the terminal).
+
+```bash
+bash scripts/run_local.sh [options]        # start (Ctrl+C stops the API; the database keeps running)
+bash scripts/run_local.sh totp             # current 6-digit code for the demo doctor and clinic
+bash scripts/run_local.sh ecg-live [S]     # stream a synthetic 12-lead live ECG for S seconds
+bash scripts/run_local.sh stop             # stop the database container (data kept)
+```
+
+| Option / command | Meaning |
+|---|---|
+| *(none)* | Start everything on http://localhost:8000 |
+| `--dev` | Also run Vite on http://localhost:5173 with hot reload (forwards `/v1` to the API). Open that address while editing `web/`; emailed links then point to :5173 |
+| `--reset` | Delete the local database volume and stored files first, then migrate and seed from scratch. Your own local accounts are deleted too, and the demo IDs change |
+| `--admin-email ADDRESS` | Also create a staff (admin) account; its set-password link is printed in the terminal |
+| `--no-demo` | Don't create the demo patient, doctor and clinic |
+| `--port N` | API port (default 8000) |
+| `totp` | Print the demo doctor/clinic authenticator code (key `CARDIOSENSDEMOTOTPSECRETCODE2345`) |
+| `ecg-live [S]` | Run [`simulate_ecg.py`](#appscriptssimulate_ecgpy) for the demo patient for S seconds (default 120, `0` = until Ctrl+C) against `http://localhost:$PORT` (`PORT` defaults to 8000) |
+| `stop` | Stop the `cardiosens-local-pg` container; data stays in the `cardiosens-local-pgdata` volume |
+| `-h`, `--help` | Show the built-in help |
+| env `PG_PORT` | Host port for PostgreSQL (default 55433) |
+
+Examples:
+
+```bash
+bash scripts/run_local.sh --dev                                  # work on the web app with hot reload
+bash scripts/run_local.sh --reset --admin-email you@example.com  # clean start with a staff account
+bash scripts/run_local.sh --port 8010                            # second instance next to one on :8000
+PORT=8010 bash scripts/run_local.sh ecg-live 60                  # live ECG to the :8010 instance
+PG_PORT=55500 bash scripts/run_local.sh                          # if 55433 is taken
+```
+
+Demo accounts, what each run does, local files and troubleshooting: [Running locally](#running-locally).
+
+### `scripts/deploy.sh`
+
+Installs or updates everything on **one Ubuntu 26.04 server**. Safe to re-run: every run copies the current code, installs dependencies, applies migrations and restarts the service, keeping settings, secrets and data.
+
+```bash
+sudo bash scripts/deploy.sh --domain app.cardiosens.ai --email ops@cardiosens.ai --admin-email ops@cardiosens.ai   # first run
+git pull && sudo bash scripts/deploy.sh                                                                         # update
+```
+
+| Option | Meaning |
+|---|---|
+| `--domain NAME` [`DOMAIN`] | Public host name, e.g. `app.cardiosens.ai`. Empty: plain HTTP on the server's IP |
+| `--email ADDRESS` [`LETSENCRYPT_EMAIL`] | Let's Encrypt account email (expiry notices). Using it accepts the Let's Encrypt terms |
+| `--mode production\|demo` [`MODE`] | `production` (default): real settings; **refuses to run without SMTP settings** in `backend.env`. `demo`: SMS codes returned by the API, emails written to the service log. **Anyone can sign in as any phone number**: test data only |
+| `--admin-email ADDRESS` [`ADMIN_EMAIL`] | Create or promote a staff account; a set-password link is emailed and printed |
+| `--admin PHONE` [`ADMIN_PHONE`] | Create or promote a staff account by phone (app sign-in) |
+| `--demo-data` | Add the demo patient, doctor, clinic and family member (`--mode demo` only) |
+| `--workers N` [`WORKERS`] | uvicorn worker processes (default 1). Request rate limits are kept per process |
+| `--no-tls` | Don't request a certificate even with a domain |
+| `--no-firewall` | Leave ufw alone |
+| `-h`, `--help` | Show the built-in help |
+
+What it does, in order:
+
+1. Checks options; in production, that `SMTP_HOST` is set in `/etc/cardiosensai/backend.env`.
+2. Installs system packages (PostgreSQL, rsync, curl…) and creates the `cardiosens` service account and folders.
+3. Copies the code to `/opt/cardiosensai/app` (rsync, root-owned; `.git`, `.venv`, `var`, `tests`, `web/node_modules` excluded).
+4. Installs Python 3.13 with uv and the locked `requirements.txt` into `/opt/cardiosensai/venv`.
+5. Creates the database and role (password generated once), writes `backend.env` (secrets generated once, `API_BASE_URL`/`WEB_BASE_URL`, mode-specific SMS/email settings).
+6. **If a migration is pending:** saves `pg_dump` to `/var/backups/cardiosensai/pre-migrate-<time>.dump`, then runs `alembic upgrade head`; then the seed (device models, `--admin*`, `--demo-data`).
+7. Installs and restarts the sandboxed systemd service `cardiosensai-api` (uvicorn on 127.0.0.1:8000, access log off).
+8. Runs [`nginx.sh`](#scriptsnginxsh) (site + certificate).
+9. Schedules the daily backup (02:30, 14 days kept) and configures ufw (SSH, 80, 443).
+10. Checks `/readyz`, that nginx passes requests and the web app loads, and prints the URLs.
+
+| Setting it writes | Where |
+|---|---|
+| Settings and secrets | `/etc/cardiosensai/backend.env` (`root:cardiosens`, 0640) |
+| Remembered options | `/etc/cardiosensai/deploy.env` |
+| Code, virtualenv, Python | `/opt/cardiosensai/app`, `/opt/cardiosensai/venv`, `/opt/cardiosensai/python` |
+| ECG waveforms, PDFs, documents | `/var/lib/cardiosensai/storage` |
+| Backups | `/var/backups/cardiosensai` (`db-*.dump`, `storage-*.tar.gz`, `pre-migrate-*.dump`) |
+| Service, backup timer | `cardiosensai-api.service`, `cardiosensai-backup.timer` |
+
+The full first-deployment checklist, upgrade notes and rollback are in [Deploying to a server](#deploying-to-a-server).
+
+### `scripts/nginx.sh`
+
+Installs nginx and certbot, writes the site config and obtains the certificate. `deploy.sh` runs it on every deploy; run it alone to add HTTPS once DNS is ready, to change the domain, or to rewrite the config.
+
+```bash
+sudo bash scripts/nginx.sh                                                        # re-apply the remembered domain and email
+sudo bash scripts/nginx.sh --domain app.cardiosens.ai --email ops@cardiosens.ai   # HTTPS for this name
+sudo bash scripts/nginx.sh --no-tls                                               # plain HTTP (testing on the IP)
+```
+
+| Option | Meaning |
+|---|---|
+| `--domain NAME` [`DOMAIN`] | Host name to serve. Empty: plain HTTP for any name or the IP |
+| `--email ADDRESS` [`LETSENCRYPT_EMAIL`] | Let's Encrypt account email; needed for the first certificate |
+| `--port N` [`API_PORT`] | Port the API listens on at 127.0.0.1 (default 8000) |
+| `--no-tls` | Don't request a certificate |
+| `-h`, `--help` | Show the built-in help |
+
+What it does:
+
+- Writes `/etc/nginx/sites-available/cardiosensai` (enabled; the default site removed). Everything is proxied to the API, which serves the web app at `/` and the API at `/v1`: request bodies up to **55 MB** (document uploads), gzip for the web app's files, `X-Forwarded-*` and `X-Request-ID` headers, 60 s proxy timeout. The file is overwritten on every run: don't edit it by hand.
+- With a domain and no certificate yet: serves the ACME challenge over HTTP, runs `certbot certonly --webroot`, then switches to HTTPS (TLS 1.2/1.3, HTTP/2) with HTTP redirecting to HTTPS. If the request fails (DNS not pointing here, port 80 closed), it stays on HTTP and warns; fix and re-run (or use `update_ssl.sh`).
+- Installs a certbot deploy hook that reloads nginx after every renewal.
+- Sets `API_BASE_URL` and `WEB_BASE_URL` in `backend.env` to `https://DOMAIN` (report links and links in emails) and restarts the API if they changed.
+- Opens ports 80 and 443 if ufw is active, and remembers the domain and email in `/etc/cardiosensai/deploy.env`.
+
+### `scripts/update_ssl.sh`
+
+Let's Encrypt certificates last 90 days. certbot's timer renews them automatically (it checks twice a day and renews within 30 days of expiry) and the hook reloads nginx, so normally nothing needs doing. This script is the one command to create the certificate, check it, or renew it by hand.
+
+```bash
+sudo bash scripts/update_ssl.sh --domain app.cardiosens.ai --email ops@cardiosens.ai   # first certificate (or a new host name)
+sudo bash scripts/update_ssl.sh            # remembered domain: create if missing, renew if 30 days or fewer left
+sudo bash scripts/update_ssl.sh --check    # report only: issuer, expiry, days left, DNS, what nginx serves, auto-renew state
+sudo bash scripts/update_ssl.sh --force    # renew now, whatever the expiry date
+sudo bash scripts/update_ssl.sh --dry-run  # test renewal against Let's Encrypt staging; changes nothing
+```
+
+| Option | Meaning |
+|---|---|
+| `--domain NAME` [`DOMAIN`] | Host name. Defaults to the one remembered in `/etc/cardiosensai/deploy.env` |
+| `--email ADDRESS` [`LETSENCRYPT_EMAIL`] | Let's Encrypt account email; required for the first certificate |
+| `--days N` [`RENEW_DAYS`] | Renew when N or fewer days are left (default 30) |
+| `--force` | Renew even if still valid (e.g. after a key compromise) |
+| `--check` | Report only. Exit code `0` = valid for more than `--days`, `1` = missing or expiring: usable from cron or monitoring |
+| `--dry-run` | Test the renewal path without touching the live certificate |
+| `--port N` [`API_PORT`] | API port passed on to `nginx.sh` (default 8000) |
+| `-h`, `--help` | Show the built-in help |
+
+What it does:
+
+1. Prints the certificate (names, issuer, expiry, days left) and checks that the domain's DNS points at this server (a warning if not; Let's Encrypt would fail).
+2. **No certificate, or a new domain:** runs `nginx.sh`, which gets the certificate over HTTP (webroot challenge on port 80), switches nginx to HTTPS with HTTP→HTTPS redirect, and sets `API_BASE_URL` / `WEB_BASE_URL` to `https://DOMAIN`.
+3. **Certificate present:** if nginx isn't using it yet (an earlier request failed), rewrites the site with `nginx.sh`; then renews with `certbot renew --cert-name DOMAIN` when it is due (or `--force`).
+4. Tests and reloads nginx, switches certbot's renewal timer on, and confirms that nginx on `127.0.0.1:443` presents the current certificate and that `https://DOMAIN/healthz` answers.
+
+Exit codes: `0` ok, `1` certificate missing/expiring (`--check`) or renewal failed, `2` usage or setup error. Typical failures: DNS not pointing here, port 80 closed by a cloud firewall (Vultr firewall group), or Let's Encrypt rate limits after many attempts (use `--dry-run` while debugging).
+
+A weekly check from cron (mails root if the certificate is missing or expiring):
+
+```bash
+echo '0 9 * * 1 root bash /opt/cardiosensai/app/scripts/update_ssl.sh --check >/dev/null || echo "CardiosensAI certificate needs attention"' | sudo tee /etc/cron.d/cardiosensai-ssl
+```
+
+### `app/scripts/seed.py`
+
+Adds the device models (always), staff accounts and demo data. Idempotent: running it again changes nothing that already exists (an existing demo database only gets the demo 12-lead ECG added if it is missing).
+
+```bash
+python -m app.scripts.seed [--demo] [--admin-email ADDRESS] [--admin PHONE]
+```
+
+| Option | Meaning |
+|---|---|
+| *(none)* | Create or update the device models only |
+| `--demo` | Demo patient, doctor, clinic and family member, readings, two ECGs (single-lead and 12-lead) and their links. **Refused when `ENV=production`** |
+| `--admin-email ADDRESS` | Create or promote a staff account by email; prints the set-password link (valid 72 h) and emails it |
+| `--admin PHONE` | Create or promote a staff account by phone number (app sign-in) |
+
+It uses the same settings as the API (`DATABASE_URL`, `STORAGE_LOCAL_PATH`, `EMAIL_PROVIDER`…). `run_local.sh` and `deploy.sh` run it for you. To run it by hand:
+
+```bash
+# locally, against the run_local.sh database
+ENV=development DATABASE_URL=postgresql+psycopg://cardiosens:cardiosens@127.0.0.1:55433/cardiosens \
+  STORAGE_LOCAL_PATH=$PWD/var/storage .venv/bin/python -m app.scripts.seed --admin-email you@example.com
+
+# on the server: easiest is to let deploy.sh do it (it re-runs the whole, idempotent deploy)
+sudo bash scripts/deploy.sh --admin-email ops@cardiosens.ai
+
+# or run only the seed, as the service account with exactly the service's settings (how deploy.sh runs it)
+sudo systemd-run --quiet --wait --pipe --collect --service-type=exec -p User=cardiosens -p Group=cardiosens \
+  -p WorkingDirectory=/opt/cardiosensai/app -p EnvironmentFile=/etc/cardiosensai/backend.env \
+  /opt/cardiosensai/venv/bin/python -m app.scripts.seed --admin-email ops@cardiosens.ai
+```
+
+### `app/scripts/simulate_ecg.py`
+
+Streams a **synthetic** 12-lead ECG as a live recording, exactly as a device would: it signs in as a patient through the public API (email + password), picks their ECG-capable device, starts a live session, sends one chunk per second and stops, after which the session is saved as a recording. Standard library only. For demos and for testing the live view; never on production patients.
+
+```bash
+python -m app.scripts.simulate_ecg [--base-url URL] [--email E] [--password P] [--seconds S] [--hr BPM] [--fs HZ]
+```
+
+| Option | Meaning |
+|---|---|
+| `--base-url URL` | API to stream to (default `http://localhost:8000`) |
+| `--email`, `--password` | Patient to sign in as (default the demo patient and demo password). The account must not use two-step sign-in and needs an ECG-capable device |
+| `--seconds S` | Length (default 60; `0` = until Ctrl+C or `kill`, both stop cleanly and save the recording) |
+| `--hr BPM` | Heart rate of the synthetic signal (default 72) |
+| `--fs HZ` | Sample rate (default 500) |
+
+`bash scripts/run_local.sh ecg-live [S]` runs it with the local defaults. Sign in as the demo doctor and open the demo patient to watch.
+
+### Web app (`npm` scripts)
+
+Run inside `web/` after `npm ci`:
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server on http://localhost:5173 with hot reload; proxies `/v1` to `http://localhost:8000` (start the API first, e.g. with `run_local.sh`) |
+| `npm test` | Unit tests (Vitest): 16-digit ID check, phone numbers, ECG drawing |
+| `npm run typecheck` | TypeScript check (`tsc -b`) |
+| `npm run build` | Typecheck, then production build into `../website/` (commit it: the server serves the committed build) |
+
+### Database and checks
+
+From the repository root, with the `.venv` that `run_local.sh` creates:
+
+| Command | What it does |
+|---|---|
+| `.venv/bin/alembic upgrade head` | Apply migrations (needs `DATABASE_URL`) |
+| `.venv/bin/alembic revision --autogenerate -m "…"` | New migration from model changes (review it before committing) |
+| `.venv/bin/alembic check` | Models and migrations agree (no output = OK) |
+| `.venv/bin/alembic downgrade -1` | Undo the last migration (0002's downgrade refuses if email-only accounts exist) |
+| `.venv/bin/pytest -q` | Backend tests on a temporary SQLite; set `TEST_DATABASE_URL=postgresql+psycopg://…` for PostgreSQL |
+| `.venv/bin/ruff check . && .venv/bin/ruff format --check .` | Lint and formatting |
+| `.venv/bin/python -c "import json; from app.main import app; json.dump(app.openapi(), open('docs/openapi.json','w'), indent=2)"` | Regenerate `docs/openapi.json` |
+| `uv pip compile pyproject.toml --universal --python-version 3.13 --no-header --annotation-style line -o requirements.txt` | Regenerate the dependency lock (keep its 3-line header; see [Dependencies](#dependencies)) |
+
+## Running locally
 
 `scripts/run_local.sh` starts the whole stack on your machine with one command: PostgreSQL in Docker, the API and the web app, with demo accounts and data. It is for development only (development secrets, SMS codes returned by the API, emails printed instead of sent).
 
@@ -52,22 +296,7 @@ Then open http://localhost:8000 and sign in with a demo account:
 
 The demo doctor and clinic are verified and already linked to the demo patient. Their authenticator key is `CARDIOSENSDEMOTOTPSECRETCODE2345`, so you can also add it to a real authenticator app. App (phone) sign-in demo numbers: patient `+919800000001`, doctor `+919800000002`, family member `+919800000003`.
 
-### Commands and options
-
-| Command | What it does |
-|---|---|
-| `bash scripts/run_local.sh` | Start everything on http://localhost:8000. Ctrl+C stops the API (the database keeps running) |
-| `bash scripts/run_local.sh --dev` | Also run Vite on http://localhost:5173 with hot reload. Open that address while working on `web/`; it forwards `/v1` to the API. Emailed links then point to :5173 |
-| `bash scripts/run_local.sh --reset` | Delete the local database and stored files first, then migrate and seed from scratch |
-| `bash scripts/run_local.sh --admin-email you@example.com` | Also create a staff (admin) account. Its set-password link is printed in the terminal |
-| `bash scripts/run_local.sh --no-demo` | Don't create the demo patient, doctor and clinic |
-| `bash scripts/run_local.sh --port 8001` | Run the API on another port |
-| `bash scripts/run_local.sh totp` | Print the current 6-digit code for the demo doctor and clinic |
-| `bash scripts/run_local.sh ecg-live [S]` | Stream a synthetic 12-lead **live ECG** for the demo patient for S seconds (default 120, `0` = until Ctrl+C) to the running API (`PORT=8010 ...` for another port). Sign in as the demo doctor to watch it; it is saved as a recording when it stops |
-| `bash scripts/run_local.sh stop` | Stop the database container (its data is kept) |
-| `PG_PORT=55500 bash scripts/run_local.sh` | Use another host port for PostgreSQL (default 55433) |
-
-Options can be combined, e.g. `bash scripts/run_local.sh --reset --dev --admin-email you@example.com`.
+All options (`--dev`, `--reset`, `--admin-email`, `--port`, `totp`, `ecg-live`, `stop`…) are in [Scripts → `run_local.sh`](#scriptsrun_localsh).
 
 ### What happens on each run
 
@@ -153,7 +382,7 @@ flowchart LR
   App[Patient app<br/>Expo / React Native<br/>cardioSE-WEB repo]
   Web[Web app — React SPA<br/>patient · doctor · clinic · staff]
   subgraph Server[One Ubuntu server]
-    NG[nginx<br/>TLS, gzip, 10 MB uploads]
+    NG[nginx<br/>TLS, gzip, 55 MB uploads]
     subgraph API[FastAPI modular monolith — uvicorn on 127.0.0.1:8000]
       R[/v1 routers/]
       S[services<br/>authz · accounts · ingestion<br/>reports · audit · email · sms]
@@ -485,7 +714,7 @@ To check the app against a running server (development mode, so codes come back 
 CARDIOSENS_E2E_API=http://127.0.0.1:8000 npx jest backend.e2e   # in the app repository
 ```
 
-## Deploying to a server (`deploy.sh`)
+## Deploying to a server
 
 `deploy.sh` installs and updates everything on **one Ubuntu 26.04 server** (the Vultr box). It is safe to re-run: every run copies the current code, installs dependencies, applies migrations and restarts the service, keeping settings, secrets and data.
 
@@ -499,7 +728,7 @@ CARDIOSENS_E2E_API=http://127.0.0.1:8000 npx jest backend.e2e   # in the app rep
 | Settings and secrets | `/etc/cardiosensai/backend.env` (`root:cardiosens`, 0640). `JWT_SECRET`, `SIGNING_KEY` and the DB password are generated on the first run and never changed |
 | Service | systemd `cardiosensai-api`: uvicorn on `127.0.0.1:8000`, runs as user `cardiosens`, sandboxed (read-only system, writes only `/var/lib/cardiosensai`) |
 | Files | ECG waveforms and PDF reports in `/var/lib/cardiosensai/storage` |
-| nginx + HTTPS | Via `nginx.sh` (below): web app at `/`, API at `/v1`, Let's Encrypt certificate |
+| nginx + HTTPS | Via [`nginx.sh`](#scriptsnginxsh): web app at `/`, API at `/v1`, Let's Encrypt certificate; check or renew with [`update_ssl.sh`](#scriptsupdate_sslsh) |
 | Backups | Daily at 02:30 (systemd timer): database dump + storage archive in `/var/backups/cardiosensai`, kept 14 days. Plus `pre-migrate-*.dump` before any run that applies a migration |
 | Firewall | ufw: SSH (your configured port), 80 and 443 only |
 
@@ -507,20 +736,7 @@ At the end it checks that the API answers `/readyz`, that nginx passes requests 
 
 ### Options
 
-Each option can also be set as the environment variable in brackets. Settings from earlier runs (`--domain`, `--email`, `--mode`, `--workers`) are remembered in `/etc/cardiosensai/deploy.env`, so later runs need no options.
-
-| Option | Meaning |
-|---|---|
-| `--domain NAME` [`DOMAIN`] | Public host name, e.g. `app.cardiosens.ai`. Empty: plain HTTP on the server's IP |
-| `--email ADDRESS` [`LETSENCRYPT_EMAIL`] | Let's Encrypt account email (expiry notices). Using it accepts the Let's Encrypt terms |
-| `--mode production\|demo` [`MODE`] | `production` (default): real settings; requires SMTP. `demo`: SMS codes returned by the API, emails written to the service log. **Anyone can sign in as any phone number**: test data only |
-| `--admin-email ADDRESS` [`ADMIN_EMAIL`] | Create or promote a staff account; a set-password link is emailed and printed |
-| `--admin PHONE` [`ADMIN_PHONE`] | Create or promote a staff account by phone (app sign-in) |
-| `--demo-data` | Add the demo patient, doctor, clinic and family member (`--mode demo` only) |
-| `--workers N` [`WORKERS`] | uvicorn worker processes (default 1). Request rate limits are kept per process |
-| `--no-tls` | Don't request a certificate even with a domain |
-| `--no-firewall` | Leave ufw alone |
-| `-h`, `--help` | Show the built-in help |
+All `deploy.sh` options, what it does step by step, and the companion scripts `nginx.sh` and `update_ssl.sh` are in [Scripts](#scriptsdeploysh). Settings from earlier runs are remembered in `/etc/cardiosensai/deploy.env`, so later runs need no options.
 
 ### First production deployment
 
@@ -607,42 +823,6 @@ sudo bash scripts/deploy.sh --mode demo --demo-data --domain test.cardiosens.ai 
 
 Emails go to `journalctl -u cardiosensai-api` instead of being sent, and SMS codes come back in the API response. Never put real patients on a demo server.
 
-## nginx and HTTPS (`nginx.sh`)
-
-`nginx.sh` installs nginx and certbot, writes the site config and gets the certificate. `deploy.sh` runs it on every deploy; run it on its own to add HTTPS once DNS is ready, to change the domain, or to rewrite the config.
-
-```bash
-sudo bash scripts/nginx.sh                                                        # re-apply the remembered domain and email
-sudo bash scripts/nginx.sh --domain app.cardiosens.ai --email ops@cardiosens.ai   # HTTPS for this name
-sudo bash scripts/nginx.sh --no-tls                                               # plain HTTP (testing on the IP)
-```
-
-| Option | Meaning |
-|---|---|
-| `--domain NAME` [`DOMAIN`] | Host name to serve. Empty: plain HTTP for any name or the IP |
-| `--email ADDRESS` [`LETSENCRYPT_EMAIL`] | Let's Encrypt account email; needed for the first certificate |
-| `--port N` [`API_PORT`] | Port the API listens on at 127.0.0.1 (default 8000) |
-| `--no-tls` | Don't request a certificate |
-| `-h`, `--help` | Show the built-in help |
-
-What it does:
-
-- Writes `/etc/nginx/sites-available/cardiosensai` (enabled; the default site is removed). Everything is proxied to the API, which serves the web app at `/` and the API at `/v1`. Uploads up to 10 MB, gzip for the web app's files, `X-Forwarded-*` and `X-Request-ID` headers, 60 s proxy timeout. The file is overwritten on every run: don't edit it by hand.
-- With a domain and no certificate yet: serves the ACME challenge over HTTP, runs `certbot certonly --webroot`, then switches to HTTPS (TLS 1.2/1.3, HTTP/2) with HTTP redirecting to HTTPS. If the request fails (DNS not pointing here, port 80 closed), it stays on HTTP, warns, and you re-run it later.
-- Renewals: certbot's own timer renews the certificate; a deploy hook reloads nginx afterwards. Check with `sudo certbot renew --dry-run`.
-- Updates `API_BASE_URL` and `WEB_BASE_URL` in `backend.env` to `https://DOMAIN` (they build report download links and the links in emails) and restarts the API if they changed.
-- Opens ports 80 and 443 if ufw is active, and remembers the domain and email in `/etc/cardiosensai/deploy.env`.
-
-| File | What |
-|---|---|
-| `/etc/cardiosensai/backend.env` | API settings and secrets (`root:cardiosens`, 0640) |
-| `/etc/cardiosensai/deploy.env` | Remembered deploy options (domain, email, mode, workers) |
-| `/etc/nginx/sites-available/cardiosensai` | Generated nginx site |
-| `/etc/letsencrypt/live/DOMAIN/` | Certificate and key |
-| `/opt/cardiosensai/app`, `/opt/cardiosensai/venv` | Installed code and virtualenv |
-| `/var/lib/cardiosensai/storage` | ECG waveforms and PDF reports |
-| `/var/backups/cardiosensai` | Daily and pre-migration backups, kept 14 days |
-
 ## Dependencies
 
 | What | Where | How to change |
@@ -697,6 +877,7 @@ scripts/
   run_local.sh           local stack (Docker PostgreSQL + API + web app + demo data)
   deploy.sh              single-server install/update for Ubuntu 26.04 (runs nginx.sh)
   nginx.sh               nginx + Let's Encrypt (run by deploy.sh, or on its own)
+  update_ssl.sh          create / check / renew the HTTPS certificate
 Dockerfile, docker-compose.yml   container image and a local compose stack
 pyproject.toml           project metadata, direct dependencies, ruff and pytest settings
 requirements.txt         generated runtime lock

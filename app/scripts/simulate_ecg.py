@@ -38,12 +38,12 @@ def call(base: str, method: str, path: str, token: str | None = None, body: dict
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--base-url", default="http://localhost:8000")
-    p.add_argument("--email", default="patient@demo.cardiosens.ai")
-    p.add_argument("--password", default="cardiosens-demo-2026")
-    p.add_argument("--seconds", type=int, default=60, help="0 = until Ctrl+C")
-    p.add_argument("--hr", type=int, default=72)
-    p.add_argument("--fs", type=int, default=500, help="sample rate (Hz)")
+    p.add_argument("--base-url", default="http://localhost:8000", help="API to stream to (default http://localhost:8000)")
+    p.add_argument("--email", default="patient@demo.cardiosens.ai", help="patient to sign in as (default the demo patient)")
+    p.add_argument("--password", default="cardiosens-demo-2026", help="that patient's password (default the demo password)")
+    p.add_argument("--seconds", type=int, default=60, help="length in seconds (default 60; 0 = until Ctrl+C or kill)")
+    p.add_argument("--hr", type=int, default=72, help="heart rate of the synthetic signal in bpm (default 72)")
+    p.add_argument("--fs", type=int, default=500, help="sample rate in Hz (default 500)")
     args = p.parse_args()
 
     login = call(args.base_url, "POST", "/v1/auth/login", body={"email": args.email, "password": args.password})
