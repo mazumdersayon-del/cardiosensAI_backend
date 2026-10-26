@@ -44,7 +44,7 @@ Done = ruff clean + pytest green (ideally also on PG) + web typecheck/test/build
 - After changing `web/`, commit the rebuilt `website/` too (servers have no Node).
 
 ## Deploy (README "Deploying")
-`git pull && sudo bash scripts/deploy.sh` on the server. Production needs SMTP vars in `/etc/cardiosensai/backend.env`; deploy dumps the DB before pending migrations. `nginx.sh` handles nginx + Let's Encrypt for `app.cardiosens.ai`; `sudo bash scripts/update_ssl.sh [--check|--force|--dry-run]` creates/checks/renews the certificate (certbot.timer renews automatically). Never run demo mode or demo data against production. Don't deploy, push or run migrations on the server without the user's go-ahead.
+`git pull && sudo bash scripts/deploy.sh` on the server. Production needs SMTP in `/etc/cardiosensai/backend.env` (`sudo bash scripts/set_smtp.sh --user no-reply@cardiosens.ai`: Google Workspace, app password, hidden prompt; never put passwords in repo files or chat); deploy dumps the DB before pending migrations. `nginx.sh` handles nginx + Let's Encrypt for `app.cardiosens.ai`; `sudo bash scripts/update_ssl.sh [--check|--force|--dry-run]` creates/checks/renews the certificate (certbot.timer renews automatically). Never run demo mode or demo data against production. Don't deploy, push or run migrations on the server without the user's go-ahead.
 
 ## Related
 - Patient app: `../cardioSE-WEB` (Expo; still uses phone OTP — `/v1/auth/otp/*` must keep working).

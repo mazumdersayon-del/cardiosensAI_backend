@@ -44,6 +44,11 @@
 #                             set-password link; the link is also printed [ADMIN_EMAIL]
 #   --admin PHONE            Create or promote this E.164 number to an admin account (app sign-in) [ADMIN_PHONE]
 #   --demo-data               Add the synthetic demo patient, doctor, clinic and family member (demo mode only)
+#   --no-email                Production without an SMTP relay yet (EMAIL_PROVIDER=none): the site runs, but
+#                             sign-up confirmation, password-reset and set-password emails are NOT sent, so only
+#                             staff created with --admin-email (link printed here) can sign in. Remembered; the
+#                             next run after SMTP_HOST is added to backend.env switches to SMTP by itself [NO_EMAIL=1]
+#   --test-email ADDRESS      After deploying, send a test email through the configured relay [TEST_EMAIL]
 #   --workers N               uvicorn worker processes (default 1; sign-in rate limits are per process) [WORKERS]
 #   --no-tls                  Skip Let's Encrypt even when a domain is set
 #   --no-firewall             Leave ufw alone
@@ -92,6 +97,8 @@ ADMIN_PHONE=${ADMIN_PHONE:-}
 ADMIN_EMAIL=${ADMIN_EMAIL:-}
 WORKERS=${WORKERS:-}
 DEMO_DATA=0
+NO_EMAIL=${NO_EMAIL:-}
+TEST_EMAIL=${TEST_EMAIL:-}
 TLS=1
 FIREWALL=1
 
@@ -106,6 +113,8 @@ while [[ $# -gt 0 ]]; do
     --workers) WORKERS=${2?}; shift 2 ;;
     --no-tls) TLS=0; shift ;;
     --no-firewall) FIREWALL=0; shift ;;
+    --no-email) NO_EMAIL=1; shift ;;
+    --test-email) TEST_EMAIL=${2?}; shift 2 ;;
     -h | --help) usage ;;
     *) die "Unknown option: $1 (see --help)" ;;
   esac
@@ -128,8 +137,33 @@ WORKERS=${WORKERS:-1}
 [[ -z $ADMIN_PHONE || $ADMIN_PHONE =~ ^\+[1-9][0-9]{7,14}$ ]] || die "--admin must be an E.164 number such as +919812345678"
 [[ -z $ADMIN_EMAIL || $ADMIN_EMAIL =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || die "--admin-email must be an email address"
 [[ $MODE == demo || $DEMO_DATA -eq 0 ]] || die "--demo-data is only allowed with --mode demo"
-if [[ $MODE == production && -z $(kv_get SMTP_HOST "$ENV_FILE") ]]; then
-  die "Production needs an SMTP relay for sign-up and password-reset emails. Add EMAIL_PROVIDER=smtp, SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD and EMAIL_FROM to $ENV_FILE (see the top of this script), then run again"
+[[ -z $TEST_EMAIL || $TEST_EMAIL =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || die "--test-email must be an email address"
+NO_EMAIL=${NO_EMAIL:-$(kv_get NO_EMAIL "$STATE_FILE")}
+if [[ $MODE == production ]]; then
+  if [[ -n $(kv_get SMTP_HOST "$ENV_FILE") ]]; then
+    EMAIL_MODE=smtp
+    NO_EMAIL=
+  elif [[ $NO_EMAIL == 1 ]]; then
+    EMAIL_MODE=none
+    warn "Deploying WITHOUT email (--no-email): sign-up confirmation and password-reset emails will not be sent."
+  else
+    die "Production needs an SMTP relay: sign-up confirmation and password-reset links are sent by email.
+
+Nothing has been changed; the running site keeps its current version.
+
+Either set up email (asks for the password hidden, writes $ENV_FILE, sends a test), then run this again:
+
+  sudo bash $(dirname "$0")/set_smtp.sh --user no-reply@cardiosens.ai      # Google Workspace: use an app password
+  sudo bash $0
+
+(other providers: add --host, e.g. --host smtppro.zoho.in; see --help)
+
+or deploy now without email and add SMTP later (only staff created with --admin-email can sign in meanwhile):
+
+  sudo bash $0 --no-email --admin-email you@example.com"
+  fi
+else
+  EMAIL_MODE=console
 fi
 if [[ -n $DOMAIN && $TLS -eq 1 && -z $LETSENCRYPT_EMAIL && ! -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
   die "HTTPS needs --email for Let's Encrypt (or pass --no-tls)"
@@ -144,8 +178,7 @@ if [[ $MODE == demo ]]; then
   warn "DEMO MODE: sign-in codes are returned by the API, so anyone can sign in as any phone number."
   warn "Use this server for test data only. Never store real patient data on it."
 else
-  warn "No SMS provider is built in: this server can't send sign-in codes, so nobody can sign in"
-  warn "until a provider is added in app/services/sms.py. Use --mode demo for a test server."
+  warn "No SMS provider is built in, so the app's phone sign-in can't send codes (email sign-in on the web works)."
 fi
 
 # ---------------------------------------------------------------- packages
@@ -241,7 +274,7 @@ if [[ $MODE == production ]]; then
   kv_set ENV production $ENV_FILE
   kv_set DEV_EXPOSE_OTP false $ENV_FILE
   kv_set SMS_PROVIDER none $ENV_FILE
-  kv_set EMAIL_PROVIDER smtp $ENV_FILE
+  kv_set EMAIL_PROVIDER "$EMAIL_MODE" $ENV_FILE
 else
   kv_set ENV development $ENV_FILE
   kv_set DEV_EXPOSE_OTP true $ENV_FILE
@@ -254,6 +287,7 @@ kv_set DOMAIN "$DOMAIN" "$STATE_FILE.new"
 kv_set LETSENCRYPT_EMAIL "$LETSENCRYPT_EMAIL" "$STATE_FILE.new"
 kv_set MODE "$MODE" "$STATE_FILE.new"
 kv_set WORKERS "$WORKERS" "$STATE_FILE.new"
+kv_set NO_EMAIL "$NO_EMAIL" "$STATE_FILE.new"
 mv "$STATE_FILE.new" "$STATE_FILE"
 
 # Run a one-off command as the service account with exactly the service's environment.
@@ -409,9 +443,18 @@ CardiosensAI backend is running ($MODE mode).
   Logs:        journalctl -u $SERVICE -f
   Backups:     $BACKUP_DIR (daily; copy them off this server)
 EOF
+if [[ -n $TEST_EMAIL ]]; then
+  log "Sending a test email to $TEST_EMAIL"
+  if run_app $VENV/bin/python -m app.scripts.test_email "$TEST_EMAIL"; then
+    echo "Sent. Check the inbox (and the spam folder) of $TEST_EMAIL."
+  else
+    warn "The test email failed (details above). Check SMTP_* in $ENV_FILE, then: sudo systemctl restart $SERVICE"
+  fi
+fi
 if [[ $MODE == demo ]]; then
-  warn "Demo mode: sign-in codes are visible to anyone. Test data only."
+  warn "Demo mode: sign-in codes are visible to anyone, emails go to the log (journalctl -u $SERVICE). Test data only."
 else
-  warn "Sign-in is unavailable until an SMS provider is added (app/services/sms.py)."
+  [[ $EMAIL_MODE == none ]] && warn "No email relay: new users can't confirm their address and nobody can reset a password. Add SMTP_* to $ENV_FILE and run this script again."
+  warn "The app's phone (SMS) sign-in can't send codes until an SMS provider is added (app/services/sms.py); email sign-in works."
 fi
 exit 0

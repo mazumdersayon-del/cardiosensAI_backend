@@ -40,8 +40,10 @@ Every operational task has a script. This section is the reference for all of th
 | [`scripts/deploy.sh`](#scriptsdeploysh) | Ubuntu 26.04 server | root | Install or update everything on the server: PostgreSQL, Python, service, nginx, HTTPS, backups, firewall, migrations |
 | [`scripts/nginx.sh`](#scriptsnginxsh) | Server | root | nginx site + Let's Encrypt certificate (run by `deploy.sh`, or alone) |
 | [`scripts/update_ssl.sh`](#scriptsupdate_sslsh) | Server | root | Create, check or renew the HTTPS certificate |
+| [`scripts/set_smtp.sh`](#scriptsset_smtpsh) | Server | root | Set up outgoing email (SMTP) with a hidden password prompt, restart, send a test |
 | [`app/scripts/seed.py`](#appscriptsseedpy) | Either | database settings | Device models, staff accounts, demo data |
 | [`app/scripts/simulate_ecg.py`](#appscriptssimulate_ecgpy) | Either | a running API | Stream a synthetic 12-lead live ECG through the public API |
+| [`app/scripts/test_email.py`](#appscriptstest_emailpy) | Either | mail settings | Send a test email to check SMTP settings |
 | [Web app (`npm run …`)](#web-app-npm-scripts) | Your machine | Node 20+ | Dev server, tests, typecheck, production build |
 | [Database and checks](#database-and-checks) | Either | `.venv` | Migrations, tests, lint, API spec |
 
@@ -108,6 +110,8 @@ git pull && sudo bash scripts/deploy.sh                                         
 | `--admin-email ADDRESS` [`ADMIN_EMAIL`] | Create or promote a staff account; a set-password link is emailed and printed |
 | `--admin PHONE` [`ADMIN_PHONE`] | Create or promote a staff account by phone (app sign-in) |
 | `--demo-data` | Add the demo patient, doctor, clinic and family member (`--mode demo` only) |
+| `--no-email` [`NO_EMAIL=1`] | Production **without** an SMTP relay yet (`EMAIL_PROVIDER=none`). The site runs, but sign-up confirmation, password-reset and set-password emails are not sent, so only staff created with `--admin-email` (link printed in the output) can sign in. Remembered; the first run after `SMTP_HOST` appears in `backend.env` switches to SMTP by itself |
+| `--test-email ADDRESS` [`TEST_EMAIL`] | After deploying, send a test email through the configured relay and report success or the SMTP error |
 | `--workers N` [`WORKERS`] | uvicorn worker processes (default 1). Request rate limits are kept per process |
 | `--no-tls` | Don't request a certificate even with a domain |
 | `--no-firewall` | Leave ufw alone |
@@ -115,7 +119,7 @@ git pull && sudo bash scripts/deploy.sh                                         
 
 What it does, in order:
 
-1. Checks options; in production, that `SMTP_HOST` is set in `/etc/cardiosensai/backend.env`.
+1. Checks options. In production it needs `SMTP_HOST` in `/etc/cardiosensai/backend.env` (or `--no-email`); otherwise it stops **before changing anything** and prints the lines to add.
 2. Installs system packages (PostgreSQL, rsync, curl…) and creates the `cardiosens` service account and folders.
 3. Copies the code to `/opt/cardiosensai/app` (rsync, root-owned; `.git`, `.venv`, `var`, `tests`, `web/node_modules` excluded).
 4. Installs Python 3.13 with uv and the locked `requirements.txt` into `/opt/cardiosensai/venv`.
@@ -201,6 +205,33 @@ A weekly check from cron (mails root if the certificate is missing or expiring):
 echo '0 9 * * 1 root bash /opt/cardiosensai/app/scripts/update_ssl.sh --check >/dev/null || echo "CardiosensAI certificate needs attention"' | sudo tee /etc/cron.d/cardiosensai-ssl
 ```
 
+### `scripts/set_smtp.sh`
+
+Sets up outgoing email on the server: writes `EMAIL_PROVIDER`, `EMAIL_FROM` and `SMTP_*` into `/etc/cardiosensai/backend.env` (all other settings are kept), restarts `cardiosensai-api` if it is running, and sends a test email. The password is asked for with **hidden input**, so it never lands in shell history, on screen or in chat. `cardiosens.ai` mail is on **Google Workspace**, so the defaults are Google's.
+
+```bash
+sudo bash scripts/set_smtp.sh --user no-reply@cardiosens.ai                   # Google: paste the 16-letter app password when asked
+sudo bash scripts/set_smtp.sh --relay --from no-reply@cardiosens.ai           # Workspace SMTP relay: no password, server IP allow-listed
+sudo bash scripts/set_smtp.sh --user me@example.com --host smtppro.zoho.in    # another provider
+sudo bash scripts/set_smtp.sh --test you@example.com                          # only send a test with the current settings
+```
+
+| Option | Meaning |
+|---|---|
+| `--user ADDRESS` | SMTP login, usually the sending mailbox |
+| `--from ADDRESS` | Sender (default: `--user`); `Name <address>` or an address |
+| `--name NAME` | Sender display name (default `CardiosensAI`) |
+| `--host NAME` | SMTP server (default `smtp.gmail.com`; `smtp-relay.gmail.com` with `--relay`) |
+| `--port N`, `--tls starttls\|ssl\|none` | Default 587 + `starttls` (465 with `ssl`) |
+| `--relay` | Google Workspace SMTP relay: no login; the server's public IP must be allowed in admin.google.com → Apps → Gmail → Routing → SMTP relay service |
+| `--test ADDRESS` | Test recipient (default: the sender). Alone, it only sends a test with the current settings |
+| `--no-test` | Don't send a test email |
+| env `SMTP_PASSWORD` | Give the password non-interactively (automation) |
+
+**Google needs an app password**, not the account password: turn on 2-Step Verification for the sending account, then create one at https://myaccount.google.com/apppasswords (16 letters; the spaces Google shows are removed). The script warns if the password doesn't look like one. Google's limits: about 2,000 messages a day per Workspace user, about 10,000 through the relay. For good delivery, set up DKIM in admin.google.com → Apps → Gmail → Authenticate email (SPF for `cardiosens.ai` is already published).
+
+If the test fails, the reason from Google is printed: `535 … Username and Password not accepted` = not an app password / 2-Step Verification off; a timeout = port 587 blocked (try `--tls ssl`, port 465); `550 … Invalid credentials for relay` = server IP not allowed for the relay yet. After setting up email, run `sudo bash scripts/deploy.sh` again if a deploy stopped at the SMTP check or ran with `--no-email`.
+
 ### `app/scripts/seed.py`
 
 Adds the device models (always), staff accounts and demo data. Idempotent: running it again changes nothing that already exists (an existing demo database only gets the demo 12-lead ECG added if it is missing).
@@ -249,6 +280,15 @@ python -m app.scripts.simulate_ecg [--base-url URL] [--email E] [--password P] [
 | `--fs HZ` | Sample rate (default 500) |
 
 `bash scripts/run_local.sh ecg-live [S]` runs it with the local defaults. Sign in as the demo doctor and open the demo patient to watch.
+
+### `app/scripts/test_email.py`
+
+Sends one test email with the configured provider (`EMAIL_PROVIDER`, `SMTP_*`, `EMAIL_FROM`) to check the mail settings. With SMTP it first logs in to the server directly, so a failure shows the real reason (wrong password, blocked port, TLS mode). Exit code `0` = sent.
+
+```bash
+sudo bash scripts/deploy.sh --test-email you@example.com           # on the server (runs it as the service account after deploying)
+.venv/bin/python -m app.scripts.test_email you@example.com          # locally (console provider: the message is printed)
+```
 
 ### Web app (`npm` scripts)
 
@@ -746,24 +786,15 @@ All `deploy.sh` options, what it does step by step, and the companion scripts `n
    git clone https://github.com/mazumdersayon-del/cardiosensAI_backend.git
    cd cardiosensAI_backend
    ```
-3. **Email:** production refuses to run without an SMTP relay (sign-up confirmation and password reset depend on it). Create the settings file with your provider's details:
+3. **Email:** production refuses to run without an SMTP relay (sign-up confirmation and password reset depend on it). `cardiosens.ai` mail is on Google Workspace: create an [app password](#scriptsset_smtpsh) for the sending mailbox, then
    ```bash
-   sudo install -d -m 0750 /etc/cardiosensai
-   sudo tee -a /etc/cardiosensai/backend.env >/dev/null <<'CONF'
-   EMAIL_PROVIDER=smtp
-   EMAIL_FROM=CardiosensAI <no-reply@cardiosens.ai>
-   SMTP_HOST=smtppro.zoho.in
-   SMTP_PORT=587
-   SMTP_TLS=starttls
-   SMTP_USERNAME=no-reply@cardiosens.ai
-   SMTP_PASSWORD=your-smtp-password
-   CONF
-   sudo chmod 0600 /etc/cardiosensai/backend.env   # deploy.sh sets root:cardiosens 0640 on its first run
+   sudo bash scripts/set_smtp.sh --user no-reply@cardiosens.ai --no-test   # asks for the app password (hidden)
    ```
-   Use port `465` with `SMTP_TLS=ssl` if your provider wants implicit TLS. Set up SPF/DKIM for the sending domain, or the mails land in spam.
+   (`--no-test` because the app isn't installed yet; step 4 sends the test.) Other providers: `--host smtppro.zoho.in`, `--host email-smtp.<region>.amazonaws.com`, `--host smtp-relay.brevo.com`… No SMTP account yet? Deploy with `--no-email` and add it later.
+
 4. **Deploy:**
    ```bash
-   sudo bash scripts/deploy.sh --domain app.cardiosens.ai --email ops@cardiosens.ai --admin-email ops@cardiosens.ai
+   sudo bash scripts/deploy.sh --domain app.cardiosens.ai --email ops@cardiosens.ai --admin-email ops@cardiosens.ai --test-email ops@cardiosens.ai
    ```
 5. **Staff account:** open the set-password link (emailed, and printed in the output), choose a password, sign in at https://app.cardiosens.ai, and turn on two-step sign-in under **Account** (required before the admin console works).
 6. **Check:** sign up a test patient, confirm the email arrives, and look at the service log (`journalctl -u cardiosensai-api -f`).
@@ -783,8 +814,8 @@ Settings, secrets, the database and stored files are kept. If the new code has a
 This release changes how people sign in, so do it deliberately:
 
 1. Copy the latest backup off the server first (`scp root@server:/var/backups/cardiosensai/db-*.dump .`).
-2. Add the SMTP settings to `/etc/cardiosensai/backend.env` (step 3 above; the file already exists).
-3. Point `app.cardiosens.ai` at the server. Then `git pull && sudo bash scripts/deploy.sh --domain app.cardiosens.ai --email ops@cardiosens.ai --admin-email ops@cardiosens.ai`. The domain changes from the remembered one, so pass it explicitly; `nginx.sh` gets a certificate for the new name.
+2. Set up email: `sudo bash scripts/set_smtp.sh --user no-reply@cardiosens.ai` (asks for the Google app password, sends a test). Without them `deploy.sh` stops before changing anything ("Production needs an SMTP relay"); to go ahead without email for now, add `--no-email` to the command below.
+3. Point `app.cardiosens.ai` at the server. Then `git pull && sudo bash scripts/deploy.sh --domain app.cardiosens.ai --email ops@cardiosens.ai --admin-email ops@cardiosens.ai --test-email ops@cardiosens.ai`. The domain changes from the remembered one, so pass it explicitly; `nginx.sh` gets a certificate for the new name.
 4. What the migration does: every account keeps its data and gets a 16-digit ID; caregiver accounts become patient accounts (their sharing grants keep working); phone becomes optional; emails are lower-cased (a duplicate address on a newer account is cleared and printed in the output).
 5. Existing users have no password. In the web app, staff open **Users**, search by name, 16-digit ID or last phone digits, and choose **Set email…**: the user gets a link (valid 72 h) to choose a password, which also confirms the address. App users can also add an email under Profile in the app and use **Forgot password** on the web.
 6. Doctors who already see patients through app invites must now be **verified** and turn on **two-step sign-in** before they see data again. Verify them under **Verification** and tell them.
