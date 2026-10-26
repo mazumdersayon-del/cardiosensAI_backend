@@ -1,62 +1,75 @@
-"""The cardiosens.ai home page, served at "/" next to the API.
+"""The web app (patient, doctor, clinic and staff dashboards), served at "/" next to the API.
 
-The files in ./website are a copy of the public site (see scripts/snapshot_website.py).
+./website is the production build of ./web (React + Vite: `cd web && npm ci && npm run build`).
 API routes are registered first, so /v1, /healthz and /docs always win over these files.
+Client-side routes (/links, /settings, /reset-password, ...) get index.html; the app routes them.
+The previous marketing page (V1.0) stays on www.cardiosens.ai; its copy is archived outside this repo.
 """
 
+import base64
+import hashlib
+import re
 from pathlib import Path
-from urllib.parse import quote
 
-from fastapi import FastAPI, Query, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import FastAPI
+from starlette.exceptions import HTTPException
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
-from app.core.errors import not_found
-
 WEBSITE_DIR = Path(__file__).resolve().parents[1] / "website"
-PUBLIC_SITE = "https://www.cardiosens.ai"
+API_PREFIXES = ("v1/", "v1", "docs", "redoc", "openapi.json", "healthz", "readyz")
+
+# The page itself: no framing, no inline script other than the theme bootstrap, API on the same origin only.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self' 'sha256-{theme}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+    "X-Frame-Options": "DENY",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+def _inline_script_hash(index_html: str) -> str:
+    m = re.search(r"<script>(.*?)</script>", index_html, re.S)
+    return base64.b64encode(hashlib.sha256(m.group(1).encode()).digest()).decode() if m else ""
 
 
 class SiteFiles(StaticFiles):
-    """Static files with browser caching (the API's default is no-store)."""
+    """Static files with browser caching (the API's default is no-store) and an SPA fallback."""
+
+    def __init__(self, *args, csp: str, **kwargs) -> None:  # noqa: ANN002, ANN003
+        super().__init__(*args, **kwargs)
+        self.csp = csp
 
     async def get_response(self, path: str, scope: Scope) -> Response:
-        response = await super().get_response(path, scope)
+        path = path.replace("\\", "/")  # StaticFiles hands over an OS path
+        try:
+            response = await super().get_response(path, scope)
+        except HTTPException as exc:
+            if exc.status_code != 404 or path.startswith(API_PREFIXES) or "." in path.rsplit("/", 1)[-1]:
+                raise
+            response = await super().get_response("index.html", scope)
+            path = "index.html"
         if response.status_code in (200, 304):
-            path = path.replace("\\", "/")  # StaticFiles hands over an OS path
-            if path.startswith("_next/static/"):
+            if path.startswith("assets/"):
                 cache = "public, max-age=31536000, immutable"  # content-hashed file names
-            elif path in (".", "index.html"):
-                cache = "public, max-age=300"
+            elif path in (".", "", "index.html"):
+                cache = "no-cache"  # always pick up a new release
             else:
                 cache = "public, max-age=86400"
             response.headers["Cache-Control"] = cache
+        for k, v in SECURITY_HEADERS.items():
+            response.headers.setdefault(k, self.csp if k == "Content-Security-Policy" else v)
         return response
 
 
 def install_website(app: FastAPI, directory: Path = WEBSITE_DIR) -> None:
-    if not (directory / "index.html").is_file():
+    index = directory / "index.html"
+    if not index.is_file():
         return  # API-only deployment
-    root = directory.resolve()
-
-    @app.get("/_next/image", include_in_schema=False)
-    def next_image(url: str = Query(max_length=200)) -> FileResponse:
-        # Next.js's image optimiser isn't available here; serve the original file.
-        path = (root / url.lstrip("/")).resolve()
-        if not url.startswith("/") or root not in path.parents or not path.is_file():
-            raise not_found("Image")
-        return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
-
-    @app.get("/blog", include_in_schema=False)
-    @app.get("/blog/{rest:path}", include_in_schema=False)
-    def blog(request: Request, rest: str = "") -> Response:
-        if request.headers.get("rsc"):
-            # Next.js client-side prefetch/navigation. An empty answer makes it fall back to a
-            # full page load, which then follows the redirect below (a cross-origin redirect
-            # here would only fail CORS).
-            return Response(status_code=204)
-        return RedirectResponse(f"{PUBLIC_SITE}/blog" + (f"/{quote(rest)}" if rest else ""), status_code=308)
-
-    app.mount("/", SiteFiles(directory=root, html=True), name="website")
+    csp = SECURITY_HEADERS["Content-Security-Policy"].replace("{theme}", _inline_script_hash(index.read_text()))
+    app.mount("/", SiteFiles(directory=directory.resolve(), html=True, csp=csp), name="website")

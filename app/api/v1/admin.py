@@ -10,29 +10,36 @@ from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import Field
+from pydantic import EmailStr, Field
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequestMeta, request_meta, require_admin
 from app.api.v1.audit import audit_out
 from app.api.v1.devices import _model_out
+from app.core.config import get_settings
 from app.core.db import get_db, utcnow
 from app.core.errors import bad_request, conflict, not_found
-from app.models import AuditEvent, Device, DeviceModel, IngestionRejection, ProfessionalProfile, RefreshToken, Report, User
+from app.models import AuditEvent, Device, DeviceModel, IngestionRejection, Organization, ProfessionalProfile, RefreshToken, Report, User
 from app.schemas.common import CamelModel
 from app.schemas.health import DeviceModelOut
 from app.schemas.sharing import AuditOut
-from app.services import audit
+from app.services import audit, email
+from app.services.accounts import issue_action_token
+from app.services.email import mask_email
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 class AdminUserOut(CamelModel):
     id: str
+    unique_id: str | None
     role: str
     status: str
-    phone_masked: str
+    phone_masked: str | None
+    email_masked: str | None
+    email_verified: bool
+    has_password: bool
     full_name: str | None
     created_at: str
     device_count: int
@@ -69,15 +76,45 @@ class OpsOut(CamelModel):
     users_by_role: dict[str, int]
 
 
-def _mask(phone: str) -> str:
+def _mask(phone: str | None) -> str | None:
+    if phone is None:
+        return None
     return phone if phone.startswith("deleted:") else phone[:3] + "•" * max(0, len(phone) - 7) + phone[-4:]
+
+
+class SetEmailIn(CamelModel):
+    email: EmailStr
+
+
+class ProfessionalQueueOut(CamelModel):
+    user_id: str
+    unique_id: str | None
+    full_name: str | None
+    registration_number: str
+    council: str
+    specialty: str | None
+    verification_status: str
+    submitted_at: str
+
+
+class OrganizationQueueOut(CamelModel):
+    id: str
+    unique_id: str
+    name: str
+    address: str | None
+    city: str | None
+    registration_number: str | None
+    phone_masked: str | None
+    owner_name: str | None
+    verification_status: str
+    created_at: str
 
 
 @router.get("/users", response_model=list[AdminUserOut])
 def list_users(
     role: str | None = None,
     status: str | None = None,
-    q: str | None = Query(default=None, max_length=40, description="Matches name or last digits of phone"),
+    q: str | None = Query(default=None, max_length=40, description="Matches name, 16-digit ID or last digits of phone"),
     limit: int = Query(default=50, ge=1, le=200),
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -88,16 +125,20 @@ def list_users(
     if status:
         stmt = stmt.where(User.status == status)
     if q:
-        stmt = stmt.where(or_(User.full_name.ilike(f"%{q}%"), User.phone.like(f"%{q}")))
+        stmt = stmt.where(or_(User.full_name.ilike(f"%{q}%"), User.phone.like(f"%{q}"), User.unique_id == q.replace(" ", "")))
     users = list(db.scalars(stmt.order_by(User.created_at.desc()).limit(limit)))
     counts = dict(db.execute(select(Device.patient_id, func.count()).where(Device.status == "active").group_by(Device.patient_id)).all())
     profs = {p.user_id: p.verification_status for p in db.scalars(select(ProfessionalProfile))}
     return [
         AdminUserOut(
             id=str(u.id),
+            unique_id=u.unique_id,
             role=u.role,
             status=u.status,
             phone_masked=_mask(u.phone),
+            email_masked=mask_email(u.email) if u.email else None,
+            email_verified=u.email_verified_at is not None,
+            has_password=u.password_hash is not None,
             full_name=u.full_name,
             created_at=u.created_at.isoformat(),
             device_count=counts.get(u.id, 0),
@@ -124,6 +165,111 @@ def set_user_status(
     if body.status == "suspended":
         db.execute(update(RefreshToken).where(RefreshToken.user_id == u.id, RefreshToken.revoked_at.is_(None)).values(revoked_at=utcnow()))
     audit.record(db, actor=admin, action=f"admin.user_{body.status}", resource_type="user", resource_id=u.id, detail=body.reason, meta=meta)
+    db.commit()
+
+
+@router.post("/users/{user_id}/email", status_code=204, summary="Set a user's sign-in email and send them a set-password link")
+def set_user_email(
+    user_id: uuid.UUID,
+    body: SetEmailIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    meta: RequestMeta = Depends(request_meta),
+) -> None:
+    """Moves an existing phone-only (app) account to email sign-in. The address is confirmed when the link is used."""
+    s = get_settings()
+    u = db.get(User, user_id)
+    if u is None or u.status == "deleted":
+        raise not_found("User")
+    addr = body.email.lower()
+    other = db.scalar(select(User.id).where(func.lower(User.email) == addr))
+    if other is not None and other != u.id:
+        raise conflict("email_taken", "Another account already uses this email address")
+    if u.email != addr:
+        u.email = addr
+        u.email_verified_at = None
+    token = issue_action_token(db, u, "reset_password", addr, max(s.password_reset_ttl_s, 72 * 3600))
+    audit.record(db, actor=admin, action="admin.user_set_email", resource_type="user", resource_id=u.id, detail=mask_email(addr), meta=meta)
+    db.commit()
+    email.send_password_reset(addr, u.full_name, token, first_time=u.password_hash is None)
+
+
+@router.get("/professionals", response_model=list[ProfessionalQueueOut], summary="Doctors' registration details (verification queue)")
+def list_professionals(
+    status: Literal["pending", "verified", "rejected"] | None = "pending",
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[ProfessionalQueueOut]:
+    stmt = select(ProfessionalProfile, User).join(User, User.id == ProfessionalProfile.user_id).where(User.status != "deleted")
+    if status:
+        stmt = stmt.where(ProfessionalProfile.verification_status == status)
+    return [
+        ProfessionalQueueOut(
+            user_id=str(u.id),
+            unique_id=u.unique_id,
+            full_name=u.full_name,
+            registration_number=p.registration_number,
+            council=p.council,
+            specialty=p.specialty,
+            verification_status=p.verification_status,
+            submitted_at=p.submitted_at.isoformat(),
+        )
+        for p, u in db.execute(stmt.order_by(ProfessionalProfile.submitted_at).limit(200)).all()
+    ]
+
+
+@router.get("/organizations", response_model=list[OrganizationQueueOut], summary="Clinics (verification queue)")
+def list_organizations(
+    status: Literal["pending", "verified", "rejected"] | None = "pending",
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[OrganizationQueueOut]:
+    stmt = select(Organization)
+    if status:
+        stmt = stmt.where(Organization.verification_status == status)
+    out = []
+    for o in db.scalars(stmt.order_by(Organization.created_at).limit(200)):
+        owner = db.get(User, o.owner_user_id) if o.owner_user_id else None
+        out.append(
+            OrganizationQueueOut(
+                id=str(o.id),
+                unique_id=o.unique_id,
+                name=o.name,
+                address=o.address,
+                city=o.city,
+                registration_number=o.registration_number,
+                phone_masked=_mask(o.phone),
+                owner_name=owner.full_name if owner else None,
+                verification_status=o.verification_status,
+                created_at=o.created_at.isoformat(),
+            )
+        )
+    return out
+
+
+@router.post("/organizations/{org_id}/verify", status_code=204, summary="Approve or reject a clinic")
+def verify_organization(
+    org_id: uuid.UUID,
+    body: VerifyIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    meta: RequestMeta = Depends(request_meta),
+) -> None:
+    org = db.get(Organization, org_id)
+    if org is None:
+        raise not_found("Clinic")
+    org.verification_status = body.decision
+    org.verified_by = admin.id
+    org.verified_at = utcnow()
+    audit.record(
+        db,
+        actor=admin,
+        action=f"admin.organization_{body.decision}",
+        resource_type="organization",
+        resource_id=org.id,
+        detail=body.note or org.registration_number,
+        meta=meta,
+    )
     db.commit()
 
 

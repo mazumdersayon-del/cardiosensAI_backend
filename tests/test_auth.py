@@ -76,7 +76,12 @@ def test_production_refuses_unsafe_settings():
         Settings(env="production")
     with pytest.raises(ValidationError):
         Settings(env="production", jwt_secret="x" * 40, signing_key="y" * 40, dev_expose_otp=True, sms_provider="none")
-    ok = Settings(env="production", jwt_secret="x" * 40, signing_key="y" * 40, sms_provider="none", dev_expose_otp=False)
+    safe = {"jwt_secret": "x" * 40, "signing_key": "y" * 40, "sms_provider": "none", "dev_expose_otp": False}
+    with pytest.raises(ValidationError):
+        Settings(env="production", **safe)  # console email would log password-reset links
+    with pytest.raises(ValidationError):
+        Settings(env="production", email_provider="smtp", **safe)  # no SMTP host
+    ok = Settings(env="production", email_provider="smtp", smtp_host="smtp.example.com", **safe)
     assert ok.env == "production"
 
 

@@ -47,6 +47,9 @@ def _clean():
     db.commit()
     db.close()
     limiter.reset()
+    from app.services import email
+
+    email.outbox.clear()
     yield
 
 
@@ -98,3 +101,32 @@ def reading(mid: str, vital: str, device_id: str | None, when: datetime, **kw) -
     }
     body.update(kw)
     return body
+
+
+def enable_mfa(client: TestClient, tokens: dict) -> str:
+    """Turn on two-step sign-in for this session's account; returns the TOTP secret."""
+    import pyotp
+
+    secret = client.post("/v1/auth/mfa/setup", headers=auth(tokens)).json()["secret"]
+    r = client.post("/v1/auth/mfa/enable", json={"code": pyotp.TOTP(secret).now()}, headers=auth(tokens))
+    assert r.status_code == 204, r.text
+    return secret
+
+
+def set_role(user_id: str, role: str) -> None:
+    import uuid
+
+    from app.models import User
+
+    db = SessionLocal()
+    db.get(User, uuid.UUID(user_id)).role = role
+    db.commit()
+    db.close()
+
+
+def make_admin(client: TestClient, phone: str = "+919833333339") -> dict:
+    t = login(client, phone)
+    set_role(t["user"]["id"], "admin")
+    t = login(client, phone)
+    enable_mfa(client, t)
+    return t

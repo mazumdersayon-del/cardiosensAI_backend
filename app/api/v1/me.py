@@ -3,7 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequestMeta, get_current_user, request_meta
@@ -12,20 +12,22 @@ from app.core.errors import bad_request, not_found
 from app.core.storage import get_storage
 from app.models import (
     AccessGrant,
+    CareLink,
     Consent,
     Device,
     EcgRecording,
     Invite,
     Measurement,
     Notification,
+    Organization,
     ProfessionalProfile,
     RefreshToken,
     Report,
     User,
 )
-from app.schemas.auth import ConsentIn, ConsentOut, ProfessionalIn, ProfessionalOut, UserOut, UserUpdateIn
+from app.schemas.auth import ConsentIn, ConsentOut, OrganizationIn, OrganizationOut, ProfessionalIn, ProfessionalOut, UserOut, UserUpdateIn
 from app.services import audit
-from app.services.serializers import device_out, ecg_out, grant_out, measurement_out, user_out
+from app.services.serializers import device_out, ecg_out, grant_out, measurement_out, organization_out, user_out
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -51,6 +53,15 @@ def update_me(body: UserUpdateIn, user: User = Depends(get_current_user), db: Se
             else:
                 raise bad_request("invalid_preference", f"Unsupported preference: {k}")
         user.preferences = prefs
+    if "email" in data:
+        new = (data.pop("email") or "").lower() or None
+        if new != user.email:
+            if user.email is not None:
+                raise bad_request("email_locked", "The sign-in email can't be changed here. Contact CardiosensAI support")
+            if new and db.scalar(select(User.id).where(func.lower(User.email) == new)) is not None:
+                raise bad_request("email_taken", "This email address can't be used")
+            user.email = new
+            user.email_verified_at = None
     for field, value in data.items():
         setattr(user, field, value)
     db.commit()
@@ -119,6 +130,31 @@ def get_professional(user: User = Depends(get_current_user), db: Session = Depen
     return ProfessionalOut.model_validate(prof)
 
 
+@router.get("/organization", response_model=OrganizationOut, summary="Clinics: this clinic's details and verification status")
+def get_organization(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> OrganizationOut:
+    org = db.get(Organization, user.organization_id) if user.role == "clinic" and user.organization_id else None
+    if org is None:
+        raise not_found("Clinic")
+    return organization_out(org)
+
+
+@router.put("/organization", response_model=OrganizationOut, summary="Clinics: update details (sends the clinic back for verification)")
+def update_organization(
+    body: OrganizationIn, user: User = Depends(get_current_user), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+) -> OrganizationOut:
+    org = db.get(Organization, user.organization_id) if user.role == "clinic" and user.organization_id else None
+    if org is None:
+        raise not_found("Clinic")
+    for k, v in body.model_dump().items():
+        setattr(org, k, v)
+    org.verification_status = "pending"
+    org.verified_at = None
+    org.verified_by = None
+    audit.record(db, actor=user, action="organization.submit", resource_type="organization", resource_id=org.id, meta=meta)
+    db.commit()
+    return organization_out(org)
+
+
 @router.get("/export", summary="Download a copy of my data (JSON)")
 def export_my_data(
     user: User = Depends(get_current_user), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
@@ -182,8 +218,14 @@ def delete_me(user: User = Depends(get_current_user), db: Session = Depends(get_
     db.execute(delete(Notification).where(Notification.user_id == user.id))
     db.execute(update(RefreshToken).where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None)).values(revoked_at=now))
     # Consent records (no health data) are kept as evidence of what was agreed and when.
-    user.phone = f"deleted:{user.id.hex[:12]}"
-    user.email = user.full_name = user.emergency_contact = None
+    db.execute(
+        update(CareLink)
+        .where(or_(CareLink.patient_id == user.id, CareLink.doctor_id == user.id), CareLink.status.in_(("pending", "active")))
+        .values(status="ended", ended_at=now, ended_by=user.id)
+    )
+    if user.phone:
+        user.phone = f"deleted:{user.id.hex[:12]}"
+    user.email = user.full_name = user.emergency_contact = user.password_hash = None
     user.date_of_birth = None
     user.mfa_secret = None
     user.mfa_enabled = False

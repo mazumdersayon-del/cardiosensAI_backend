@@ -1,15 +1,36 @@
+# ---- Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-.env
-var/
-*.db
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 .coverage
 htmlcov/
 dist/
 build/
 *.egg-info/
+
+# ---- Node / web app (web/ is the source; website/ is the committed build and IS tracked)
+node_modules/
+*.tsbuildinfo
+web/.vite/
+npm-debug.log*
+
+# ---- Local runtime data and secrets
+.env
+.env.*
+!.env.example
+var/
+*.db
+*.dump
+*.log
+credential.txt
+
+# ---- Editors and OS
+.idea/
+.vscode/
+*.swp
 .DS_Store
+Thumbs.db

@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from app.core.db import SessionLocal
 from app.models import AccessGrant
-from tests.conftest import auth, login, now, reading, register_device
+from tests.conftest import auth, enable_mfa, login, make_admin, now, reading, register_device
 
 
 def patient_with_data(client):
@@ -110,17 +110,12 @@ def test_doctor_invites_require_verification_by_admin(client):
         "/v1/me/professional-profile", json={"registrationNumber": "KMC-12345", "council": "Karnataka Medical Council"}, headers=auth(doc)
     )
 
-    from app.models import User
-
-    adm = login(client, "+919833333339")
-    db = SessionLocal()
-    u = db.get(User, __import__("uuid").UUID(adm["user"]["id"]))
-    u.role = "admin"
-    db.commit()
-    db.close()
-    adm = login(client, "+919833333339")
+    adm = make_admin(client)
     r = client.post(f"/v1/admin/professionals/{doc['user']['id']}/verify", json={"decision": "verified"}, headers=auth(adm))
     assert r.status_code == 204
+    # Verified, but doctors also need two-step sign-in before they see patient data.
+    assert client.post("/v1/invites/accept", json={"token": g["inviteToken"]}, headers=auth(doc)).status_code == 403
+    enable_mfa(client, doc)
     assert client.post("/v1/invites/accept", json={"token": g["inviteToken"]}, headers=auth(doc)).status_code == 200
     listed = client.get("/v1/shared-with-me", headers=auth(doc)).json()
     assert listed[0]["patientId"] == pid and listed[0]["lastMeasurementAt"] is not None
@@ -129,9 +124,8 @@ def test_doctor_invites_require_verification_by_admin(client):
     assert client.get(f"/v1/patients/{pid}/measurements", headers=auth(adm)).status_code == 404
     users = client.get("/v1/admin/users", headers=auth(adm)).json()
     assert all("•" in u["phoneMasked"] for u in users)
-    assert all(
-        set(u) <= {"id", "role", "status", "phoneMasked", "fullName", "createdAt", "deviceCount", "professionalStatus"} for u in users
-    )
+    allowed = {"id", "uniqueId", "role", "status", "phoneMasked", "emailMasked", "emailVerified", "hasPassword", "fullName", "createdAt"}
+    assert all(set(u) <= allowed | {"deviceCount", "professionalStatus"} for u in users)
     # Patients and doctors can't use admin endpoints.
     assert client.get("/v1/admin/users", headers=auth(doc)).status_code == 403
 

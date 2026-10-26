@@ -16,7 +16,7 @@ from app.core.security import new_token, sha256_hex
 from app.models import AccessGrant, Invite, Measurement, User
 from app.schemas.sharing import GrantCreatedOut, GrantIn, GrantOut, InviteAcceptIn, SharedPatientOut
 from app.services import audit
-from app.services.authz import VITALS, is_verified_professional
+from app.services.authz import VITALS, grant_usable, is_verified_professional
 from app.services.notifications import notify
 from app.services.serializers import grant_out, grant_status
 
@@ -127,8 +127,8 @@ def accept_invite(
         raise bad_request("own_invite", "You can't accept your own invite")
     if user.role == "admin":
         raise forbidden("Admin accounts can't receive patient data")
-    if g.role == "doctor" and not is_verified_professional(db, user):
-        raise forbidden("Doctor invites need a verified professional account. Submit your registration details first.")
+    if g.role == "doctor" and not (is_verified_professional(db, user) and user.mfa_enabled):
+        raise forbidden("Doctor invites need a verified professional account with two-step sign-in turned on.")
     inv.used_at = utcnow()
     g.grantee_user_id = user.id
     g.status = "active"
@@ -168,9 +168,8 @@ def shared_with_me(user: User = Depends(get_current_user), db: Session = Depends
         .order_by(AccessGrant.accepted_at.desc())
     )
     out: list[SharedPatientOut] = []
-    verified = is_verified_professional(db, user)
     for g in grants:
-        if g.role == "doctor" and not verified:
+        if not grant_usable(db, user, g):
             continue
         patient = db.get(User, g.patient_id)
         if patient is None or patient.status != "active":

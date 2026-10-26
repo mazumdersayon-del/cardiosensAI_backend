@@ -20,8 +20,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal, utcnow
+from app.core.passwords import hash_password
 from app.core.storage import get_storage
-from app.models import AccessGrant, Device, DeviceModel, EcgRecording, Measurement, ProfessionalProfile, User
+from app.models import AccessGrant, CareLink, Device, DeviceModel, EcgRecording, Measurement, Organization, ProfessionalProfile, User
+from app.services import email
+from app.services.accounts import allocate_unique_id, issue_action_token
 
 DEVICE_MODELS = [
     {
@@ -66,12 +69,27 @@ def seed_models(db: Session) -> dict[str, DeviceModel]:
     return out
 
 
-def ensure_user(db: Session, phone: str, role: str, name: str, code: str | None = None) -> User:
+DEMO_PASSWORD = "cardiosens-demo-2026"  # noqa: S105 - demo mode only (refused in production)
+DEMO_TOTP_SECRET = "CARDIOSENSDEMOTOTPSECRETCODE2345"  # noqa: S105 - demo doctor/clinic two-step sign-in
+
+
+def ensure_user(db: Session, phone: str, role: str, name: str, code: str | None = None, email: str | None = None) -> User:
     u = db.scalar(select(User).where(User.phone == phone))
     if u is None:
-        u = User(phone=phone, role=role, full_name=name, patient_code=code, preferences={"glucoseUnit": "mg/dL", "tempUnit": "°C"})
+        u = User(
+            phone=phone,
+            role=role,
+            unique_id=allocate_unique_id(db, role),
+            full_name=name,
+            patient_code=code,
+            preferences={"glucoseUnit": "mg/dL", "tempUnit": "°C"},
+        )
         db.add(u)
         db.flush()
+    if email and u.email is None:
+        u.email = email
+        u.email_verified_at = utcnow()
+        u.password_hash = hash_password(DEMO_PASSWORD)
     return u
 
 
@@ -79,9 +97,27 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
     rnd = random.Random(4812)  # noqa: S311 - synthetic demo data, not security
     now = utcnow()
     ist = 330
-    patient = ensure_user(db, "+919800000001", "patient", "Ananya Rao (demo)", "CS-P-0004812")
-    doctor = ensure_user(db, "+919800000002", "doctor", "Dr. Meera Iyer (demo)")
-    family = ensure_user(db, "+919800000003", "caregiver", "Rohan Rao (demo)")
+    patient = ensure_user(db, "+919800000001", "patient", "Ananya Rao (demo)", "CS-P-0004812", "patient@demo.cardiosens.ai")
+    doctor = ensure_user(db, "+919800000002", "doctor", "Dr. Meera Iyer (demo)", email="doctor@demo.cardiosens.ai")
+    family = ensure_user(db, "+919800000003", "patient", "Rohan Rao (demo)")
+    doctor.mfa_secret, doctor.mfa_enabled = DEMO_TOTP_SECRET, True
+    clinic_user = ensure_user(db, "+919800000004", "clinic", "Front desk (demo)", email="clinic@demo.cardiosens.ai")
+    clinic_user.mfa_secret, clinic_user.mfa_enabled = DEMO_TOTP_SECRET, True
+    if clinic_user.organization_id is None:
+        org = Organization(
+            unique_id=clinic_user.unique_id,
+            name="Demo Heart Clinic",
+            address="12 Park Street",
+            city="Kolkata",
+            registration_number="DEMO-CE-001",
+            phone="+913340000000",
+            owner_user_id=clinic_user.id,
+            verification_status="verified",
+            verified_at=now,
+        )
+        db.add(org)
+        db.flush()
+        clinic_user.organization_id = org.id
     if db.get(ProfessionalProfile, doctor.id) is None:
         db.add(
             ProfessionalProfile(
@@ -232,12 +268,46 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
             ),
         ]
     )
-    print(f"Demo data: {len(rows)} simulated readings, 1 ECG, patient +919800000001, doctor +919800000002, family +919800000003")
+    db.flush()
+    doctor_grant = db.scalar(select(AccessGrant.id).where(AccessGrant.patient_id == patient.id, AccessGrant.grantee_user_id == doctor.id))
+    clinic_grant = AccessGrant(
+        patient_id=patient.id,
+        grantee_user_id=clinic_user.id,
+        grantee_name="Demo Heart Clinic",
+        grantee_contact=clinic_user.unique_id,
+        role="clinic",
+        vitals=["hr", "spo2", "bp", "resp", "temp", "glucose", "ecg"],
+        history="all",
+        downloads_allowed=True,
+        status="active",
+        created_at=now - timedelta(days=12),
+        accepted_at=now - timedelta(days=12),
+    )
+    db.add(clinic_grant)
+    db.flush()
+    t = now - timedelta(days=12)
+    db.add_all(
+        [
+            CareLink(kind="patient_doctor", patient_id=patient.id, doctor_id=doctor.id, status="active", requested_by=patient.id,
+                     patient_ok_at=t, doctor_ok_at=t, decided_at=t, grant_id=doctor_grant),
+            CareLink(kind="patient_clinic", patient_id=patient.id, organization_id=clinic_user.organization_id, status="active",
+                     requested_by=patient.id, patient_ok_at=t, clinic_ok_at=t, decided_at=t, grant_id=clinic_grant.id),
+            CareLink(kind="doctor_clinic", doctor_id=doctor.id, organization_id=clinic_user.organization_id, status="active",
+                     requested_by=clinic_user.id, doctor_ok_at=t, clinic_ok_at=t, decided_at=t),
+        ]
+    )  # fmt: skip
+    print(f"Demo data: {len(rows)} simulated readings, 1 ECG.")
+    print(f"  Sign in with password {DEMO_PASSWORD!r}:")
+    print(f"  patient@demo.cardiosens.ai  {patient.unique_id}")
+    print(f"  doctor@demo.cardiosens.ai   {doctor.unique_id}  (authenticator secret {DEMO_TOTP_SECRET})")
+    print(f"  clinic@demo.cardiosens.ai   {clinic_user.unique_id}  (authenticator secret {DEMO_TOTP_SECRET})")
+    print("  App (phone sign-in): patient +919800000001, doctor +919800000002, family +919800000003")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--admin", help="Phone number (E.164) to create or promote as an admin")
+    parser.add_argument("--admin-email", help="Email address to create or promote as an admin; prints and emails a set-password link")
     parser.add_argument("--demo", action="store_true", help="Add synthetic demo users and readings")
     args = parser.parse_args()
     db = SessionLocal()
@@ -250,7 +320,25 @@ def main() -> None:
                 db.add(u)
             else:
                 u.role = "admin"
+            if u.unique_id is None or not u.unique_id.startswith("9"):
+                db.flush()
+                u.unique_id = allocate_unique_id(db, "admin")
             print(f"Admin: {args.admin}")
+        if args.admin_email:
+            addr = args.admin_email.strip().lower()
+            u = db.scalar(select(User).where(User.email == addr))
+            if u is None:
+                u = User(email=addr, role="admin", full_name="Administrator", unique_id=allocate_unique_id(db, "admin"), preferences={})
+                db.add(u)
+                db.flush()
+            elif u.role != "admin":
+                u.role = "admin"
+                u.unique_id = allocate_unique_id(db, "admin")
+            token = issue_action_token(db, u, "reset_password", addr, 72 * 3600)
+            db.commit()
+            link = f"{get_settings().web_base_url.rstrip('/')}/reset-password?token={token}"
+            email.send_password_reset(addr, u.full_name, token, first_time=u.password_hash is None)
+            print(f"Admin: {addr}. Set the password within 72 hours at:\n  {link}\nThen sign in and turn on two-step sign-in.")
         if args.demo:
             if get_settings().env == "production":
                 raise SystemExit("Refusing to add demo data in production")

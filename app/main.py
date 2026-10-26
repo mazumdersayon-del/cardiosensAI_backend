@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.v1 import admin, audit, auth, devices, ecg, me, measurements, notifications, reports, sharing
+from app.api.v1 import admin, audit, auth, devices, ecg, links, me, measurements, notifications, reports, sharing
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import install_error_handlers
@@ -14,8 +14,10 @@ from app.website import install_website
 DESCRIPTION = """
 API for the CardiosensAI connected health monitoring platform.
 
+* **Patients, doctors and clinics** sign in with email and password and are identified by a 16-digit CardiosensAI ID.
 * **Patients** upload readings from their devices, review history and ECG recordings, share selected data and create PDF reports.
-* **Family members, caregivers and doctors** see only what a patient explicitly shared, within the history window the patient chose.
+* **Doctors and clinics** see a patient's data only after the patient approves a link, and only once CardiosensAI has verified them
+  and they use two-step sign-in. Family members see only what a patient explicitly shared.
 * **Administrators** manage accounts, device models and operations, and never receive health values.
 
 Every reading keeps its device, acquisition mode (live, synced later, manual), quality and original UTC offset.
@@ -30,7 +32,7 @@ def create_app() -> FastAPI:
     configure_logging()
     app = FastAPI(
         title=settings.app_name,
-        version="0.1.0",
+        version="0.2.0",
         description=DESCRIPTION,
         responses={
             400: {"model": ErrorResponse},
@@ -61,6 +63,7 @@ def create_app() -> FastAPI:
         measurements.router,
         ecg.router,
         sharing.router,
+        links.router,
         notifications.router,
         reports.router,
         admin.router,

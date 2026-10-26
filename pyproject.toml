@@ -1,6 +1,6 @@
 [project]
 name = "cardiosensai-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "CardiosensAI connected health monitoring platform — API (FastAPI + PostgreSQL)"
 requires-python = ">=3.12"
 readme = "README.md"
@@ -16,12 +16,13 @@ dependencies = [
   "email-validator>=2.3",
   "pyjwt>=2.15",
   "pyotp>=2.10",
+  "argon2-cffi>=25.1",
   "reportlab>=5.0",
 ]
 
 [project.optional-dependencies]
 s3 = ["boto3>=1.43"]
-dev = ["pytest>=9.1", "httpx>=0.28", "ruff>=0.17"]
+dev = ["pytest==9.1.1", "httpx==0.28.1", "ruff==0.17.0"]  # exact: dev tools are not in the lock file
 
 [tool.ruff]
 line-length = 140

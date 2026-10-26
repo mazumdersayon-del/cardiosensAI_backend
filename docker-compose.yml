@@ -1,7 +1,7 @@
 # Local development stack: PostgreSQL + API. Not a production deployment.
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: cardiosens
       POSTGRES_PASSWORD: cardiosens

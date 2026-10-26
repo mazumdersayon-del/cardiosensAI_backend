@@ -40,7 +40,14 @@ def require_roles(*roles: str):
 
 
 require_patient = require_roles("patient")
-require_admin = require_roles("admin")
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    if user.role != "admin":
+        raise forbidden()
+    if not user.mfa_enabled:
+        raise forbidden("Staff accounts must turn on two-step sign-in before using the admin console")
+    return user
 
 
 @dataclass

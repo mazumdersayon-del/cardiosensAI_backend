@@ -30,6 +30,22 @@ class Settings(BaseSettings):
     dev_expose_otp: bool = False
     sms_provider: Literal["console", "none"] = "console"
 
+    # Email + password sign-in
+    web_base_url: str = "http://localhost:5173"  # where links in emails point (the web app)
+    email_provider: Literal["console", "smtp", "none"] = "console"
+    email_from: str = "CardiosensAI <no-reply@cardiosens.ai>"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_tls: Literal["starttls", "ssl", "none"] = "starttls"
+    email_verify_ttl_s: int = 24 * 3600
+    password_reset_ttl_s: int = 3600
+    login_max_failures: int = 5
+    login_lockout_s: int = 15 * 60
+    rate_limit_login_per_ip: int = 50
+    refresh_cookie_name: str = "cs_refresh"
+
     invite_ttl_s: int = 72 * 3600
     report_link_ttl_s: int = 10 * 60
 
@@ -51,6 +67,10 @@ class Settings(BaseSettings):
     rate_limit_otp_per_ip: int = 30
     rate_limit_window_s: int = 15 * 60
 
+    @property
+    def secure_cookies(self) -> bool:
+        return self.env not in ("development", "test")
+
     @model_validator(mode="after")
     def _guard_production(self) -> "Settings":
         if self.env in ("staging", "production"):
@@ -63,6 +83,10 @@ class Settings(BaseSettings):
                 problems.append("DEV_EXPOSE_OTP must be false")
             if self.sms_provider == "console":
                 problems.append("SMS_PROVIDER must be a real provider (console only logs codes)")
+            if self.email_provider == "console":
+                problems.append("EMAIL_PROVIDER must be smtp (console only logs messages, including password-reset links)")
+            if self.email_provider == "smtp" and not self.smtp_host:
+                problems.append("SMTP_HOST is required when EMAIL_PROVIDER=smtp")
             if problems:
                 raise ValueError("Unsafe configuration: " + "; ".join(problems))
         return self

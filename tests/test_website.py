@@ -1,39 +1,35 @@
-"""The cardiosens.ai home page served at "/" alongside the API."""
+"""The web app (React build in ./website) served at "/" alongside the API."""
+
+import re
 
 
-def test_home_page_is_the_website(client):
+def test_home_page_is_the_web_app(client):
     r = client.get("/")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
-    assert "CardiosensAI" in r.text and "Know if it" in r.text
-    assert r.headers["cache-control"] == "public, max-age=300"
+    assert '<div id="root">' in r.text and "CardiosensAI" in r.text
+    assert r.headers["cache-control"] == "no-cache"
+    csp = r.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in csp and "connect-src 'self'" in csp and "'sha256-" in csp
 
 
-def test_site_assets_are_served_with_long_cache(client):
+def test_client_routes_fall_back_to_the_app(client):
+    for path in ("/links", "/settings", "/reset-password?token=abc", "/patients/123"):
+        r = client.get(path)
+        assert r.status_code == 200 and '<div id="root">' in r.text, path
+
+
+def test_missing_files_are_404_not_the_app(client):
+    assert client.get("/assets/nope.js").status_code == 404
+    assert client.get("/logos/nope.png").status_code == 404
+
+
+def test_built_assets_are_served_with_long_cache(client):
     html = client.get("/").text
-    css = html.split('rel="stylesheet" href="')[1].split('"')[0]
-    r = client.get(css)
-    assert r.status_code == 200
-    assert "immutable" in r.headers["cache-control"]
-
-
-def test_next_image_serves_the_original_file(client):
-    r = client.get("/_next/image", params={"url": "/logos/cardiosensai-logo.png", "w": 1080, "q": 75})
-    assert r.status_code == 200
-    assert r.headers["content-type"] == "image/png"
-
-
-def test_next_image_stays_inside_the_site(client):
-    assert client.get("/_next/image", params={"url": "/../app/core/config.py"}).status_code == 404
-    assert client.get("/_next/image", params={"url": "https://example.com/x.png"}).status_code == 404
-
-
-def test_blog_redirects_to_public_site(client):
-    r = client.get("/blog", follow_redirects=False)
-    assert r.status_code == 308
-    assert r.headers["location"] == "https://www.cardiosens.ai/blog"
-    # Next.js client navigation gets an empty answer and falls back to a full page load.
-    assert client.get("/blog", headers={"RSC": "1"}, follow_redirects=False).status_code == 204
+    js = re.search(r'src="(/assets/[^"]+\.js)"', html).group(1)
+    r = client.get(js)
+    assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
+    assert client.get("/logos/cardiosensai-logo.png").headers["content-type"] == "image/png"
 
 
 def test_api_routes_take_precedence(client):

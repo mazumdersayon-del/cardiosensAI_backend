@@ -4,7 +4,8 @@ Rules:
 - A patient can see all of their own data.
 - Anyone else needs an ACTIVE, UNEXPIRED grant from that patient that lists the
   requested vital sign (or "ecg"), and only sees data inside the grant's history window.
-- Doctor grants also require the doctor's professional verification to still be valid.
+- Doctor and clinic grants also require the viewer to still be verified by CardiosensAI and to
+  use two-step sign-in (services/accounts.py: can_view_patients).
 - Administrators never get health data through their admin role.
 - If there is no grant at all we answer "not found", so patient existence isn't revealed.
 """
@@ -20,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.db import utcnow
 from app.core.errors import forbidden, not_found
 from app.models import AccessGrant, ProfessionalProfile, User
+from app.services.accounts import can_view_patients
 
 VITALS = ("hr", "spo2", "bp", "resp", "temp", "glucose")
 SHAREABLE = (*VITALS, "ecg")
@@ -74,10 +76,16 @@ def active_grant_for(db: Session, actor: User, patient_id: uuid.UUID, now: datet
         .order_by(AccessGrant.created_at.desc())
     )
     for grant in db.scalars(stmt):
-        if grant.role == "doctor" and not is_verified_professional(db, actor):
+        if not grant_usable(db, actor, grant):
             continue
         return grant
     return None
+
+
+def grant_usable(db: Session, actor: User, grant: AccessGrant) -> bool:
+    if grant.role in ("doctor", "clinic") or actor.role in ("doctor", "clinic"):
+        return can_view_patients(db, actor)
+    return True
 
 
 def is_verified_professional(db: Session, user: User) -> bool:

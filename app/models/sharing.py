@@ -25,7 +25,9 @@ class AccessGrant(Base):
     grantee_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     grantee_name: Mapped[str] = mapped_column(String(120))
     grantee_contact: Mapped[str] = mapped_column(String(254))
-    role: Mapped[str] = mapped_column(String(16))  # family | caregiver | doctor
+    role: Mapped[str] = mapped_column(
+        String(16)
+    )  # family | caregiver | doctor | clinic (clinic and link-created doctor grants come from care_links)
     vitals: Mapped[list] = mapped_column(JSONType, default=list)  # e.g. ["hr","bp","ecg"]
     history: Mapped[str] = mapped_column(String(16))  # from_now | last_30_days | all
     downloads_allowed: Mapped[bool] = mapped_column(Boolean, default=False)

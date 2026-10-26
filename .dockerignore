@@ -1,9 +1,21 @@
-.venv
+# The image needs only: app/, alembic/, alembic.ini, pyproject.toml, requirements.txt, website/
 .git
+.github
 .env
+.env.*
+.venv
+venv
 var
-tests
 **/__pycache__
 .pytest_cache
 .ruff_cache
 *.db
+*.dump
+*.log
+credential.txt
+tests
+web
+docs
+scripts
+docker-compose.yml
+*.md

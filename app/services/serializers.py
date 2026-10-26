@@ -1,8 +1,8 @@
 """ORM → response model conversion (kept in one place so field mapping stays consistent)."""
 
 from app.core.db import utcnow
-from app.models import AccessGrant, Device, EcgRecording, Measurement, Notification, Report, User
-from app.schemas.auth import UserOut
+from app.models import AccessGrant, Device, EcgRecording, Measurement, Notification, Organization, Report, User
+from app.schemas.auth import OrganizationOut, UserOut
 from app.schemas.common import iso_with_offset
 from app.schemas.health import Calibration, DeviceOut, EcgOut, MeasurementOut, ProvenanceOut, Segment
 from app.schemas.sharing import GrantOut, NotificationOut, ReportOut
@@ -11,9 +11,12 @@ from app.schemas.sharing import GrantOut, NotificationOut, ReportOut
 def user_out(u: User) -> UserOut:
     return UserOut(
         id=str(u.id),
+        unique_id=u.unique_id,
         role=u.role,
         phone=u.phone,
         email=u.email,
+        email_verified=u.email_verified_at is not None,
+        organization_id=str(u.organization_id) if u.organization_id else None,
         full_name=u.full_name,
         date_of_birth=u.date_of_birth,
         emergency_contact=u.emergency_contact,
@@ -143,4 +146,18 @@ def report_out(r: Report) -> ReportOut:
         error=r.error,
         created_at=r.created_at,
         completed_at=r.completed_at,
+    )
+
+
+def organization_out(o: Organization) -> OrganizationOut:
+    return OrganizationOut(
+        id=str(o.id),
+        unique_id=o.unique_id,
+        name=o.name,
+        address=o.address,
+        city=o.city,
+        registration_number=o.registration_number,
+        phone=o.phone,
+        verification_status=o.verification_status,
+        verified_at=o.verified_at,
     )
