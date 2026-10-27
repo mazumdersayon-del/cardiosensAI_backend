@@ -84,7 +84,6 @@ export default function GoogleButton({ mode, onCredential }: { mode: 'signin' | 
           <button type="button" className="btn ghost" disabled style={{ width: '100%' }}>
             <GoogleMark /> {mode === 'signup' ? 'Sign up with Google' : 'Continue with Google'}
           </button>
-          <small className="muted">{state === 'off' ? 'Google sign-in isn’t set up on this server yet.' : 'Couldn’t load Google sign-in. Check your connection.'}</small>
         </>
       )}
     </div>

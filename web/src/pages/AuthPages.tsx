@@ -291,9 +291,9 @@ export function LoginCodePage() {
 // ---------------------------------------------------------------- sign-up
 
 const ROLES = [
-  { key: 'patient', label: 'Patient', hint: 'Track your own vitals and share them with your doctor or clinic' },
-  { key: 'doctor', label: 'Doctor', hint: 'Registered medical practitioner. Verified by CardiosensAI before you can see patients' },
-  { key: 'clinic', label: 'Clinic', hint: 'Clinic or hospital. Verified by CardiosensAI before you can see patients' },
+  { key: 'patient', label: 'Patient' },
+  { key: 'doctor', label: 'Doctor' },
+  { key: 'clinic', label: 'Clinic' },
 ] as const;
 
 export function RegisterPage() {
@@ -341,7 +341,7 @@ export function RegisterPage() {
   }
 
   return (
-    <AuthShell title="Create an account" sub="Every account gets a 16-digit CardiosensAI ID that links patients, doctors and clinics.">
+    <AuthShell title="Create an account">
       <div className="seg" role="group" aria-label="Account type" style={{ alignSelf: 'center' }}>
         {ROLES.map((r) => (
           <button key={r.key} type="button" aria-pressed={role === r.key} onClick={() => setRole(r.key)}>
@@ -349,9 +349,6 @@ export function RegisterPage() {
           </button>
         ))}
       </div>
-      <small className="muted" style={{ textAlign: 'center' }}>
-        {ROLES.find((r) => r.key === role)!.hint}
-      </small>
       {google ? (
         <Banner kind="ok">
           Signing up with Google as <strong>{fromGoogle?.email}</strong>.{' '}
@@ -374,11 +371,11 @@ export function RegisterPage() {
       )}
       <form className="stack" onSubmit={submit}>
         {field('fullName', role === 'clinic' ? 'Your name (account manager)' : 'Full name', { required: true, minLength: 2, autoComplete: 'name' })}
-        <PhoneInput label="Mobile number" hint="We send a code to this number to activate your account." value={f.phone ?? ''} onChange={(v) => setF((x) => ({ ...x, phone: v }))} required />
+        <PhoneInput label="Mobile number" value={f.phone ?? ''} onChange={(v) => setF((x) => ({ ...x, phone: v }))} required />
         {!google && (
           <>
-            {field('email', 'Email (optional)', { type: 'email', autoComplete: 'email' }, 'If you add one, it gets its own code too.')}
-            {field('password', 'Password', { type: 'password', required: true, minLength: 10, autoComplete: 'new-password' }, 'At least 10 characters. Avoid common passwords.')}
+            {field('email', 'Email (optional)', { type: 'email', autoComplete: 'email' })}
+            {field('password', 'Password', { type: 'password', required: true, minLength: 10, autoComplete: 'new-password' })}
             {field('password2', 'Repeat password', { type: 'password', required: true, autoComplete: 'new-password' })}
           </>
         )}
