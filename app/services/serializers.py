@@ -16,6 +16,9 @@ def user_out(u: User) -> UserOut:
         phone=u.phone,
         email=u.email,
         email_verified=u.email_verified_at is not None,
+        phone_verified=u.phone_verified_at is not None,
+        google_linked=u.google_sub is not None,
+        has_password=u.password_hash is not None,
         organization_id=str(u.organization_id) if u.organization_id else None,
         full_name=u.full_name,
         date_of_birth=u.date_of_birth,
@@ -161,4 +164,5 @@ def organization_out(o: Organization) -> OrganizationOut:
         phone=o.phone,
         verification_status=o.verification_status,
         verified_at=o.verified_at,
+        review_note=o.review_note,
     )

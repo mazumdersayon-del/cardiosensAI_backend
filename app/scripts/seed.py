@@ -87,6 +87,8 @@ def ensure_user(db: Session, phone: str, role: str, name: str, code: str | None 
         )
         db.add(u)
         db.flush()
+    if u.phone and u.phone_verified_at is None:
+        u.phone_verified_at = utcnow()
     if email and u.email is None:
         u.email = email
         u.email_verified_at = utcnow()
@@ -387,7 +389,7 @@ def main() -> None:
         if args.admin:
             u = db.scalar(select(User).where(User.phone == args.admin))
             if u is None:
-                u = User(phone=args.admin, role="admin", full_name="Administrator")
+                u = User(phone=args.admin, phone_verified_at=utcnow(), role="admin", full_name="Administrator")
                 db.add(u)
             else:
                 u.role = "admin"

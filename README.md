@@ -2,7 +2,7 @@
 
 FastAPI + PostgreSQL backend and React web app for the CardiosensAI connected health monitoring platform. One deployable serves:
 
-- the **API** (`/v1`) used by the patient mobile app ([cardioSE-WEB](https://github.com/mazumdersayon-del/cardioSE-WEB)) and the web app;
+- the **API** (`/v1`) used by the mobile app for patients, doctors and clinics ([cardioSE-WEB](https://github.com/mazumdersayon-del/cardioSE-WEB)) and the web app;
 - the **web app** (`/`): one sign-in page for patients, doctors and clinics, then a separate dashboard per role, plus a staff console.
 
 Patients, doctors and clinics are identified and linked by a **16-digit CardiosensAI ID**.
@@ -15,7 +15,7 @@ Patients, doctors and clinics are identified and linked by a **16-digit Cardiose
 
 | Area | Summary |
 |---|---|
-| **Sign-in** | One login page for every role: email + password (argon2id, 10+ characters, common-password check, 5 failures lock the account for 15 min). Email confirmation and password reset by single-use emailed links. TOTP second factor, **required for doctors, clinics and staff**. 15-minute access tokens, rotating refresh tokens with reuse detection; the web app keeps its refresh token in an httpOnly SameSite=Strict cookie. The app's SMS one-time code still works |
+| **Sign-up and sign-in** | Sign-up needs a **mobile number** (email optional): a 6-digit code goes to the phone, and to the email if given; entering them creates the account, activated and signed in (no confirmation links). Sign-in: type an email or mobile number → a code by email or SMS on a separate page, with **"use password instead"** (argon2id, 10+ characters, common-password check, 5 failures lock for 15 min). **Continue with Google** on both pages (Google Identity Services; sign-up with Google still confirms the mobile number). TOTP second factor, **required for doctors, clinics and staff**. Password reset by emailed link. 15-minute access tokens, rotating refresh tokens with reuse detection; the web app keeps its refresh token in an httpOnly SameSite=Strict cookie |
 | **Accounts** | Patient, doctor, clinic (self sign-up, role chosen on the form) and admin (CardiosensAI staff). Every account has a **16-digit ID**: role digit (1 patient, 2 doctor, 3 clinic, 9 staff) + 14 random digits + Luhn check digit. A clinic is an organisation with its own ID and, in v1, one login |
 | **Links** | Patient↔doctor, patient↔clinic and doctor↔clinic, made by typing the other's 16-digit ID. Both sides approve (the requester's side on request), so the patient approves every patient link. An active patient link gives full, revocable access through an access grant; ending it stops access at once. A clinic's link doesn't extend to its doctors. A clinic can ask a patient to link with one of its doctors. Doctors and clinics must be verified by staff **and** use two-step sign-in before they can link or see anything |
 | **Web app** | React SPA at `/`: the sign-in page, or the signed-in role's dashboard. Doctor/clinic home leads with **latest recordings** (newest readings, last ECG, live badge) across linked patients; a patient's page starts with the live ECG, latest readings, newest ECG and documents, with **History behind a button**. Light and dark themes |
@@ -27,7 +27,7 @@ Patients, doctors and clinics are identified and linked by a **16-digit Cardiose
 | **Sharing** | Patient-created grants: chosen vitals, history window (`from_now`, `last_30_days`, `all`), downloads on/off, notices, expiry. Single-use hashed invite tokens. Revocation is immediate, including report links already issued |
 | **Reports** | PDF built in the background (reportlab) and downloadable only through 10-minute signed links bound to one user. Permission is re-checked on every download |
 | **Audit** | Append-only trail of logins, sharing changes, viewer reads, downloads and admin actions. Values are never logged. Patients see an access log |
-| **Admin** | Users (masked phone and email), suspension, doctor and clinic verification, moving app accounts to email sign-in, device models, ops dashboard and audit search. Requires two-step sign-in. Admins get **no** health data |
+| **Admin portal** (`/admin`) | Statistics (accounts, sign-ups, activity, volume; counts only, CSV), doctor and clinic verification against uploaded licence documents (verify, reject with reason, revoke; emailed), account search with filters and CSV export, deletion with a 30-day grace period (restore or erase now), moving app accounts to email sign-in. API also: device models, ops, audit search. Requires two-step sign-in. Admins get **no** health data |
 | **Privacy** | Data export (JSON) and account deletion (health data removed; audit and consent records kept) |
 
 ## Scripts
@@ -41,6 +41,7 @@ Every operational task has a script. This section is the reference for all of th
 | [`scripts/nginx.sh`](#scriptsnginxsh) | Server | root | nginx site + Let's Encrypt certificate (run by `deploy.sh`, or alone) |
 | [`scripts/update_ssl.sh`](#scriptsupdate_sslsh) | Server | root | Create, check or renew the HTTPS certificate |
 | [`scripts/set_smtp.sh`](#scriptsset_smtpsh) | Server | root | Set up outgoing email (SMTP) with a hidden password prompt, restart, send a test |
+| [`scripts/set_sms.sh`](#scriptsset_smssh) | Server | root | Set up SMS for one-time codes (MSG91 / Twilio) with hidden prompts, restart, send a test code. **Needed for sign-up** |
 | [`app/scripts/seed.py`](#appscriptsseedpy) | Either | database settings | Device models, staff accounts, demo data |
 | [`app/scripts/simulate_ecg.py`](#appscriptssimulate_ecgpy) | Either | a running API | Stream a synthetic 12-lead live ECG through the public API |
 | [`app/scripts/test_email.py`](#appscriptstest_emailpy) | Either | mail settings | Send a test email to check SMTP settings |
@@ -110,7 +111,7 @@ git pull && sudo bash scripts/deploy.sh                                         
 | `--admin-email ADDRESS` [`ADMIN_EMAIL`] | Create or promote a staff account; a set-password link is emailed and printed |
 | `--admin PHONE` [`ADMIN_PHONE`] | Create or promote a staff account by phone (app sign-in) |
 | `--demo-data` | Add the demo patient, doctor, clinic and family member (`--mode demo` only) |
-| `--no-email` [`NO_EMAIL=1`] | Production **without** an SMTP relay yet (`EMAIL_PROVIDER=none`). The site runs, but sign-up confirmation, password-reset and set-password emails are not sent, so only staff created with `--admin-email` (link printed in the output) can sign in. Remembered; the first run after `SMTP_HOST` appears in `backend.env` switches to SMTP by itself |
+| `--no-email` [`NO_EMAIL=1`] | Production **without** an SMTP relay yet (`EMAIL_PROVIDER=none`). The site runs, but email codes, password-reset and set-password emails are not sent, so only staff created with `--admin-email` (link printed in the output) can sign in. Remembered; the first run after `SMTP_HOST` appears in `backend.env` switches to SMTP by itself |
 | `--test-email ADDRESS` [`TEST_EMAIL`] | After deploying, send a test email through the configured relay and report success or the SMTP error |
 | `--workers N` [`WORKERS`] | uvicorn worker processes (default 1). Request rate limits are kept per process |
 | `--no-tls` | Don't request a certificate even with a domain |
@@ -123,7 +124,7 @@ What it does, in order:
 2. Installs system packages (PostgreSQL, rsync, curl…) and creates the `cardiosens` service account and folders.
 3. Copies the code to `/opt/cardiosensai/app` (rsync, root-owned; `.git`, `.venv`, `var`, `tests`, `web/node_modules` excluded).
 4. Installs Python 3.13 with uv and the locked `requirements.txt` into `/opt/cardiosensai/venv`.
-5. Creates the database and role (password generated once), writes `backend.env` (secrets generated once, `API_BASE_URL`/`WEB_BASE_URL`, mode-specific SMS/email settings).
+5. Creates the database and role (password generated once), writes `backend.env` (secrets generated once, `API_BASE_URL`/`WEB_BASE_URL`, mode-specific SMS/email settings; an SMS provider set up with [`set_sms.sh`](#scriptsset_smssh) is kept).
 6. **If a migration is pending:** saves `pg_dump` to `/var/backups/cardiosensai/pre-migrate-<time>.dump`, then runs `alembic upgrade head`; then the seed (device models, `--admin*`, `--demo-data`).
 7. Installs and restarts the sandboxed systemd service `cardiosensai-api` (uvicorn on 127.0.0.1:8000, access log off).
 8. Runs [`nginx.sh`](#scriptsnginxsh) (site + certificate).
@@ -232,6 +233,36 @@ sudo bash scripts/set_smtp.sh --test you@example.com                          # 
 
 If the test fails, the reason from Google is printed: `535 … Username and Password not accepted` = not an app password / 2-Step Verification off; a timeout = port 587 blocked (try `--tls ssl`, port 465); `550 … Invalid credentials for relay` = server IP not allowed for the relay yet. After setting up email, run `sudo bash scripts/deploy.sh` again if a deploy stopped at the SMTP check or ran with `--no-email`.
 
+### `scripts/set_sms.sh`
+
+Sets up SMS for one-time codes on the server, then sends a test code. **Production needs it: sign-up sends a code to the mobile number**, so until an SMS provider is configured nobody can sign up (sign-in by email code, password or Google still works). Secrets are asked for with hidden input.
+
+```bash
+sudo bash scripts/set_sms.sh --provider msg91 --template <DLT_TEMPLATE_ID> --test +919812345678     # India (DLT)
+sudo bash scripts/set_sms.sh --provider twilio --sid AC... --from MG... --test +15551234567         # Twilio
+sudo bash scripts/set_sms.sh --test +919812345678                                                   # test current settings
+```
+
+| Option | What it does |
+|---|---|
+| `--provider msg91\|twilio\|none` | SMS provider (`none` switches SMS off) |
+| `--template ID` | MSG91: the DLT-registered OTP template; its text must contain `##OTP##`, e.g. "##OTP## is your CardiosensAI code. It expires in 10 minutes. Don't share it with anyone." |
+| `--notice-template ID` | MSG91, optional: template for "this number already has an account" (sent instead of a code when someone signs up with a registered number; skipped without it) |
+| `--sid SID`, `--from SENDER` | Twilio: account SID, and a sender number or Messaging Service SID |
+| `--test NUMBER` | Send a test code (`app/scripts/test_sms.py`, as the service account) |
+
+India: SMS needs a registered DLT entity, sender ID (header) and template. MSG91, Twilio and others help with the registration; approval takes a few days. Writes `SMS_PROVIDER` and `MSG91_*` / `TWILIO_*` in `backend.env` and restarts the API.
+
+### Google sign-in
+
+"Continue with Google" appears on the sign-in and sign-up pages once the server has a client id:
+
+1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth client ID** → *Web application*. Authorised JavaScript origins: `https://app.cardiosens.ai` (and `http://localhost:8000` for local testing). No redirect URI is needed (popup mode). Set up the OAuth consent screen (app name, support email, `cardiosens.ai` domain); only the basic `openid email profile` scopes are used.
+2. On the server: add `GOOGLE_CLIENT_ID=<id>.apps.googleusercontent.com` to `/etc/cardiosensai/backend.env` and `sudo systemctl restart cardiosensai-api`.
+3. Mobile app: create *Android* (package `com.cardiosensai.patient` + the signing key's SHA-1) and *iOS* client ids, build the app with `CS_GOOGLE_ANDROID_CLIENT_ID` / `CS_GOOGLE_IOS_CLIENT_ID` (and `CS_GOOGLE_WEB_CLIENT_ID`), and list them on the server: `GOOGLE_EXTRA_CLIENT_IDS=["<android id>","<ios id>"]`.
+
+The server checks every Google ID token's signature (Google's published keys, cached), audience, issuer, expiry and that the email is verified. A Google sign-in finds the account by its Google id, or by the same verified email (then links it). Sign-up with Google takes the email from Google (no email code, no password needed) but still confirms the mobile number by SMS.
+
 ### `app/scripts/seed.py`
 
 Adds the device models (always), staff accounts and demo data. Idempotent: running it again changes nothing that already exists (an existing demo database only gets the demo 12-lead ECG added if it is missing).
@@ -280,6 +311,20 @@ python -m app.scripts.simulate_ecg [--base-url URL] [--email E] [--password P] [
 | `--fs HZ` | Sample rate (default 500) |
 
 `bash scripts/run_local.sh ecg-live [S]` runs it with the local defaults. Sign in as the demo doctor and open the demo patient to watch.
+
+### `app/scripts/purge_deleted.py`
+
+Erases accounts whose 30-day deletion grace period is over (accounts an admin deleted in the portal). `deploy.sh` installs a systemd timer that runs it daily at 03:15 (`cardiosensai-purge.timer`); running it by hand is safe.
+
+```bash
+.venv/bin/python -m app.scripts.purge_deleted --dry-run      # locally: list what is due
+sudo systemctl start cardiosensai-purge.service              # on the server: run it now (as the service account)
+journalctl -u cardiosensai-purge -n 20                       # what the last runs erased
+```
+
+### `app/scripts/test_sms.py`
+
+Sends one test sign-in code by SMS with the configured provider. `set_sms.sh --test` runs it on the server; locally: `.venv/bin/python -m app.scripts.test_sms +919812345678` (console provider: logged).
 
 ### `app/scripts/test_email.py`
 
@@ -350,7 +395,7 @@ The first run takes a few minutes (Docker image, Python, npm packages); later ru
 
 ### Emails and sign-up locally
 
-Nothing is emailed. Confirmation, password-reset and set-password messages are printed in the terminal as `email_sent` log lines that include the link. To try sign-up: register at http://localhost:8000/register, copy the `/verify-email?token=...` link from the terminal into the browser, then sign in. A new doctor or clinic stays unverified until a staff account verifies it: start with `--admin-email`, open the printed set-password link, sign in, turn on two-step sign-in under Account, then use **Verification**.
+Nothing is emailed or texted. With `DEV_EXPOSE_OTP=true` (set by `run_local.sh`) the sign-up and sign-in pages show the one-time codes under the code fields ("Development: …"); emails (codes, password-reset and set-password links) are also printed in the terminal as `email_sent` log lines. To try sign-up: register at http://localhost:8000/register with any mobile number, enter the codes shown, and you are signed in. A new doctor or clinic stays unverified until a staff account verifies it: start with `--admin-email`, open the printed set-password link, sign in, turn on two-step sign-in under Account, then use **Verification** at `/admin/verification` (the doctor or clinic must first upload a licence document under Account).
 
 ### Local files
 
@@ -374,7 +419,7 @@ cd web && npm test && npm run typecheck
 
 \* Create the test database once: `docker exec cardiosens-local-pg createdb -U cardiosens cardiosens_test`. Tests wipe it.
 
-The 64 tests cover 12-lead uploads, live ECG streaming/viewing/saving and stall handling, document uploads (types, limits, permissions, comments, signed links), the dashboard summary, email sign-up, confirmation, lockout, password reset and the web session cookie; 16-digit IDs; patient/doctor/clinic linking (approval, verification and two-step gates, clinic roster, requests on a doctor's behalf, ending a link); moving app accounts to email; SMS sign-in, refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, admin isolation from health data, ECG integrity, signed report links, account deletion and the web app serving. `cd web && npm test` checks the client-side ID validation.
+The 78 tests cover sign-up with SMS + email codes (no account until both are entered, no leaks, resend, phone-only sign-up, adding an email later), sign-in by email or SMS code and by password with email or mobile number, Google sign-up and sign-in (linking by verified email), SMS providers (MSG91, Twilio, none), the admin portal (licence uploads and who can open them, verify / reject with reason / resubmit / revoke, delete with grace period, restore, erase, the purge job, clinic erasure, user search and CSV export, statistics without health values), 12-lead uploads, live ECG streaming/viewing/saving and stall handling, document uploads (types, limits, permissions, comments, signed links), the dashboard summary, lockout, password reset and the web session cookie; 16-digit IDs; patient/doctor/clinic linking (approval, verification and two-step gates, clinic roster, requests on a doctor's behalf, ending a link); moving app accounts to email; SMS sign-in, refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, admin isolation from health data, ECG integrity, signed report links, account deletion and the web app serving. `cd web && npm test` checks the client-side ID validation.
 
 Before merging a change that touches models, also run `alembic check` against a migrated PostgreSQL database (no output = models and migrations agree).
 
@@ -419,7 +464,7 @@ flowchart LR
     GL[Glucose meter<br/>BLE 0x1808]
     WR[CardiosensAI wearable]
   end
-  App[Patient app<br/>Expo / React Native<br/>cardioSE-WEB repo]
+  App[Mobile app<br/>patients · doctors · clinics<br/>Expo / React Native<br/>cardioSE-WEB repo]
   Web[Web app — React SPA<br/>patient · doctor · clinic · staff]
   subgraph Server[One Ubuntu server]
     NG[nginx<br/>TLS, gzip, 55 MB uploads]
@@ -463,9 +508,12 @@ Errors always have the shape `{"error": {"code", "message"}}`. "Not found" is al
 
 | Path | Who | Flow |
 |---|---|---|
-| Email + password | Everyone (web, later the app) | `POST /v1/auth/register` (always answers 202, so it can't reveal who has an account) → emailed link → `POST /v1/auth/email/verify` → `POST /v1/auth/login` |
+| Sign-up | Everyone | `POST /v1/auth/register` (mobile number required, email optional, password unless Google) → 6-digit code by SMS, and by email if given → `POST /v1/auth/register/verify {signupId, phoneCode, emailCode}` creates the account (phone/email verified) and signs in. Nothing is stored as an account before that: the pending sign-up (password already hashed) waits on the code challenge. Same answer when the number or email is taken (its owner gets a notice instead of a code). `/register/resend` sends new codes |
+| Code sign-in | Everyone | `POST /v1/auth/login/start {identifier}` (email → code by email, mobile number → code by SMS; same answer for unknown addresses, no code sent) → `POST /v1/auth/login/verify {challengeId, code}`. A code also confirms that email or number on older accounts |
+| Password | Accounts with a password | `POST /v1/auth/login {identifier, password}` (`email` still accepted from older app builds). Needs a confirmed number or email |
+| Google | Everyone | `POST /v1/auth/google {credential}` (Google ID token) → signed in, or 404 `no_account` → sign-up with the token (`googleCredential`) |
 | Two-step (TOTP) | Required for doctor, clinic, admin; optional for patients | Login returns `{mfaRequired, mfaToken}` (5 min) → `POST /v1/auth/mfa/verify` with the 6-digit code |
-| Phone + SMS code | The patient app (until it moves to email) | `POST /v1/auth/otp/request` → `POST /v1/auth/otp/verify`; creates a patient account on first sign-in |
+| Codes in detail | — | 6 digits, 10 min, 5 tries each, single use; only an HMAC bound to the challenge and address is stored (`otp_challenges`). Rate limits per address and per IP. SMS through `SMS_PROVIDER` (MSG91 / Twilio), email through SMTP. Older app builds' `/otp/request` + `/otp/verify` (phone sign-in that creates a patient) still work |
 | Password reset | Everyone | `POST /v1/auth/password/forgot` (always 204) → emailed link → `POST /v1/auth/password/reset` (ends every session) |
 
 | Credential | Lifetime | Storage |
@@ -486,8 +534,8 @@ Errors always have the shape `{"error": {"code", "message"}}`. "Not found" is al
 | Sign up | Self | Self + registration number | Self + clinic details | `seed --admin-email` / `deploy.sh --admin-email` |
 | Own health data | Read/write | — | — | — |
 | Others' health data | — | Patients who approved a link | Patients who approved a link | **Never** |
-| Prerequisites to link or view | Confirmed email | Confirmed email + staff verification + TOTP | Confirmed email + staff verification + TOTP | TOTP for the admin console |
-| Dashboard (`/`) | Patient home | Patient list | Patient list + doctor roster | Verification queue, users |
+| Prerequisites to link or view | Confirmed mobile/email (sign-up does it) | Same + licence document + staff verification + TOTP | Same + licence document + staff verification + TOTP | TOTP for the admin portal |
+| Dashboard (`/`) | Patient home | Patient list | Patient list + doctor roster | `/admin` portal: overview, verification, users |
 
 ### Authorization: one gate for health data
 
@@ -582,14 +630,28 @@ sequenceDiagram
 
 `POST /v1/reports` returns 202 and a FastAPI background task renders the PDF (reportlab) into storage. `POST /v1/reports/{id}/download-link` returns a 10-minute HMAC-signed URL bound to one user and report; the download re-checks permission.
 
+### Admin portal (`/admin`)
+
+Web pages for staff (`web/src/pages/Admin.tsx`); API in `app/api/v1/admin.py` (`require_admin`: admin role + TOTP, re-checked per request). Every action is audited; nothing returns health values.
+
+| Page | What it does | API |
+|---|---|---|
+| **Overview** `/admin` | Accounts by role × status, email confirmed, two-step on; verification counts (incl. "no documents"); sign-ups per day (≤ 90 days) or week; signed in last 24 h / 7 / 30 days (`users.last_active_at`, set on sign-in and refresh); patients who uploaded readings / recorded ECGs in the period / have a device; platform volume (readings, ECGs, live sessions, documents, reports, devices, care links, family shares) total and in the period. Period 7/30/90/365 days. CSV export | `GET /v1/admin/stats?days=`, `/stats.csv` |
+| **Verification** `/admin/verification` | Doctors and clinics by status (pending / verified / rejected / revoked / all) with registration details and their **licence documents** (opened through 10-minute signed links; each view audited as `admin.licence_view`). **Verify** needs at least one document. **Reject** (pending) and **Revoke** (verified) need a reason, which is stored, shown to the account and emailed; revoking stops patient access at once (`can_view_patients`). Every decision is emailed | `GET /professionals`, `/organizations` `?status=`; `POST .../verify {decision: verified|rejected|revoked, note}`; `POST /verification-files/{id}/link` |
+| **Users** `/admin/users` | Search (name, email, ID prefix, phone suffix), filter by role, status, verification; 50 per page; CSV export (emails masked unless "Full email addresses" is ticked; exports are audited). Per account: set/change sign-in email, reactivate a suspended account, **Delete** (with reason), and for accounts scheduled for deletion **Restore** or **Erase now** (type the 16-digit ID) | `GET /users`, `/users.csv`; `POST /users/{id}/delete`, `/restore`, `/erase`, `/email`; `PATCH /users/{id}/status` |
+
+**Deletion** (`app/services/erasure.py`): an admin delete sets status `deleting` and `erase_after = now + 30 days`, ends every session and emails the user. Every check for `status == "active"` (sign-in, API, health-data gate, links, directory, dashboards) then treats the account as gone, but links and data are kept, so **Restore** brings everything back. After 30 days the purge job (`app/scripts/purge_deleted.py`, daily systemd timer) erases it exactly like a self-delete: health data and files, licence documents, personal details, sessions and notifications are removed; links and shares end; for a clinic, its links end and the organisation is anonymised. The anonymised row stays (the ID is never reused, audit events still resolve) and consent records are kept as evidence. Admin accounts can't be deleted from the portal (only from the server), nor can admins delete themselves. A patient's own **Delete account** is still immediate.
+
+**Licence documents** (`app/api/v1/verification.py`): doctors and clinic logins upload their registration / licence certificate under Account (`POST /v1/me/verification/files`, PDF or JPEG by content, 15 MB each, at most 3 kept; stored under `verification/<user>/`). Only the owner and staff can open them. While an account isn't verified it can remove files; a verified account keeps them. Account status lists `upload_licence` until one exists. After a rejection or revocation the account fixes its details or files and resubmits (`POST /v1/me/verification/resubmit`, or editing the registration details), which puts it back in the pending queue.
+
 ### Web app (`web/` → `website/`)
 
 | Piece | File | Notes |
 |---|---|---|
-| Entry, routes | `src/main.tsx`, `src/App.tsx` | React Router. `/` = sign-in or the role's home. `/links`, `/doctors`, `/patients/:id`, `/settings`, `/admin/users`, `/register`, `/verify-email`, `/forgot-password`, `/reset-password` |
+| Entry, routes | `src/main.tsx`, `src/App.tsx` | React Router. `/` = sign-in or the role's home. `/links`, `/doctors`, `/patients/:id`, `/settings`, `/admin`, `/admin/verification`, `/admin/users`, `/register` → `/register/verify` (codes), `/login/code` (code or password), `/forgot-password`, `/reset-password` |
 | Session | `src/auth.tsx`, `src/api.ts` | On load calls `/v1/auth/refresh` (cookie) to restore the session; a 401 triggers one silent refresh. Access token only in memory |
 | Screens | `src/pages/*` | `PatientHome`, `ProDashboard` (latest-recordings dashboard, patient detail with collapsible History, clinic doctors), `LinksPage`, `Settings`, `Admin`, `AuthPages` |
-| Components | `src/components/*` | Phone input (country-code dropdown with flags, India default, stores E.164; data and rules in `src/countries.ts`), ID card with QR, vitals + SVG trend chart (gaps never interpolated), ECG viewer (12-lead 3×4 + rhythm strip or per-lead strips, 25 mm/s × 10 mm/mV paper, calibration pulse, 10 s pages) and live ECG panel (`Ecg.tsx`), documents with uploads, previews and comments (`Documents.tsx`), reports, link tables, TOTP setup, setup checklist |
+| Components | `src/components/*` | Phone input (country-code dropdown with flags, India default, stores E.164; data and rules in `src/countries.ts`), ID card with QR, vitals + SVG trend chart (gaps never interpolated), Google button (`GoogleButton.tsx`, Google Identity Services), mobile/email card with add-by-code (`Contact.tsx`), ECG viewer (12-lead 3×4 + rhythm strip or per-lead strips, 25 mm/s × 10 mm/mV paper, calibration pulse, 10 s pages) and live ECG panel (`Ecg.tsx`), documents with uploads, previews and comments (`Documents.tsx`), licence documents and resubmission (`Licence.tsx`), reports, link tables, TOTP setup, setup checklist |
 | Theme | `src/theme.css` | Light palette from the patient app, dark from the V1.0 site; follows the OS, toggle stored in `localStorage` |
 
 The build output is committed in `website/` (hashed assets cached for a year, `index.html` revalidated on every load), so servers need no Node.js. `app/website.py` adds security headers: a Content-Security-Policy that allows only same-origin scripts (plus the hash of the inline theme script) and same-origin API calls, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: same-origin`, and a Permissions-Policy.
@@ -599,8 +661,9 @@ After changing `web/`, rebuild and commit both folders: `cd web && npm ci && npm
 ### Security summary
 
 - Secrets refuse development values in staging/production (`core/config.py`), as do `DEV_EXPOSE_OTP`, the console SMS sender and the console email sender.
-- Rate limits (in-process): sign-in by IP, OTP by phone and IP, registration, resends, lookups, link requests, report generation.
-- Audit events never contain health values. Request logs record the route template (`/v1/reports/download/{token}`), not the URL, so ids and signed tokens stay out of logs; uvicorn's own access log is off. Phone numbers and emails are masked in logs and the admin console.
+- Rate limits (in-process): sign-in by IP, codes by address and IP, registration (IP and number), resends, Google sign-in, lookups, link requests, report generation.
+- The web pages' CSP allows exactly one outside origin, Google Identity Services (`accounts.google.com/gsi/`: script, style, iframe, endpoint), and they send `Referrer-Policy: strict-origin-when-cross-origin` (Google checks the origin); API responses keep `no-referrer`.
+- Audit events never contain health values. Request logs record the route template (`/v1/reports/download/{token}`), not the URL, so ids and signed tokens stay out of logs; uvicorn's own access log is off. Phone numbers and emails are masked in logs and the admin portal (full emails only in an explicitly requested, audited CSV export).
 - Admins can manage accounts but get no health data from any endpoint.
 - Deletion removes health data and personal details, ends grants and links, and keeps consent and audit records.
 
@@ -625,16 +688,21 @@ erDiagram
   users ||--o{ action_tokens : "emailed links"
   users ||--o{ consents : gives
   users ||--o{ notifications : receives
+  users ||--o{ verification_files : "licence documents"
   users {
     uuid id PK
     string unique_id UK "16-digit ID"
     string email UK "lower-case"
     timestamptz email_verified_at
     string password_hash "argon2id"
-    string phone UK "optional (app sign-in)"
+    string phone UK "mobile, required at sign-up"
+    timestamptz phone_verified_at "SMS code"
+    string google_sub UK "Google account id"
     string role "patient|doctor|clinic|admin"
     uuid organization_id FK "clinic login"
-    string status "active|suspended|deleted"
+    string status "active|suspended|deleting|deleted"
+    timestamptz erase_after "deleting: purge after"
+    timestamptz last_active_at "last sign-in / refresh"
     bool mfa_enabled
     int failed_logins
     timestamptz locked_until
@@ -645,7 +713,8 @@ erDiagram
     string name
     string registration_number
     uuid owner_user_id FK
-    string verification_status "pending|verified|rejected"
+    string verification_status "pending|verified|rejected|revoked"
+    string review_note "reason, shown to the clinic"
   }
   care_links {
     uuid id PK
@@ -681,7 +750,7 @@ erDiagram
   }
 ```
 
-Also present: `device_models`, `ecg_recordings` (storage key + SHA-256, `leads`), `ecg_live_sessions` + `ecg_live_chunks`, `documents` + `document_files` + `document_comments`, `otp_challenges`, `refresh_tokens`, `action_tokens`, `invites`, `reports`, `consents`, `notifications`, `ingestion_rejections` (reason codes only) and `audit_events` (never health values).
+Also present: `device_models`, `ecg_recordings` (storage key + SHA-256, `leads`), `ecg_live_sessions` + `ecg_live_chunks`, `documents` + `document_files` + `document_comments`, `professional_profiles` (registration details, `verification_status` incl. `revoked`, `review_note`), `verification_files` (licence documents: storage key + SHA-256), `otp_challenges` (one-time codes: purpose signup / login / add_email / add_phone / legacy, channel sms / email, the pending sign-up in `payload`), `refresh_tokens`, `action_tokens`, `invites`, `reports`, `consents`, `notifications`, `ingestion_rejections` (reason codes only) and `audit_events` (never health values).
 
 **Indexes:** `measurements(patient_id, vital, measured_at)` for history, unique `(patient_id, client_id)` for idempotency, partial unique `(model_id, serial) WHERE status='active'` for device ownership, `audit_events(patient_id, at)`, and `care_links` by patient, doctor and organisation.
 
@@ -692,10 +761,12 @@ Also present: `device_models`, `ecg_recordings` (storage key + SHA-256, `leads`)
 | `0001` | Initial schema (phone sign-in, grants, readings, ECG, reports, audit) |
 | `0002` | Email + password, `organizations`, `care_links`, `action_tokens`, 16-digit IDs back-filled for every user, caregivers → patients, phone optional, unique lower-case email. Downgrade refuses if email-only accounts exist |
 | `0003` | `ecg_recordings.leads` (back-filled with each recording's lead), live ECG tables, document tables |
+| `0005` | Code sign-up/sign-in and Google: `otp_challenges` gets purpose, channel, email, user, group and payload (phone optional); `users.phone_verified_at` (back-filled for accounts with a phone: it could only get there by SMS code), `users.google_sub`; unused email-confirmation tokens are retired |
+| `0004` | Admin portal: `users.erase_after`, `users.last_active_at` (back-filled from each user's newest session), `review_note` on `professional_profiles` and `organizations`, `verification_files` |
 
 `alembic upgrade head` applies them (`run_local.sh` and `deploy.sh` do it for you). After changing models: `alembic revision --autogenerate -m "..."`, review the file, then check with `alembic check` against PostgreSQL. The two foreign keys that close the users↔organizations cycle are named (`fk_organizations_owner`, `fk_organizations_verified_by`) so `drop_all` works.
 
-**Retention (to be decided with legal review):** readings until the account is deleted; ingestion rejections can be pruned after 90 days; OTP challenges, used action tokens and expired refresh tokens daily; audit events per counsel's advice.
+**Retention (to be decided with legal review):** readings until the account is deleted (admin deletions: 30 days later, by the purge job); ingestion rejections can be pruned after 90 days; OTP challenges, used action tokens and expired refresh tokens daily; audit events per counsel's advice.
 
 ## API overview
 
@@ -703,7 +774,7 @@ Interactive docs at `/docs` (disabled when `ENV=production`); the full spec is `
 
 | Area | Endpoints |
 |---|---|
-| Sign-in | `POST /v1/auth/register`, `/login`, `/mfa/verify`, `/refresh`, `/logout`, `/logout-all`, `/email/verify`, `/email/resend`, `/password/forgot`, `/password/reset`, `/password/change`, `GET /v1/auth/status`; app: `/otp/request`, `/otp/verify`; TOTP: `/mfa/setup`, `/mfa/enable`, `/mfa/disable` |
+| Sign-up / sign-in | `GET /v1/auth/options`; `POST /v1/auth/register`, `/register/verify`, `/register/resend`, `/login/start`, `/login/verify`, `/login` (password), `/google`, `/mfa/verify`, `/refresh`, `/logout`, `/logout-all`, `/password/forgot`, `/password/reset`, `/password/change`, `GET /v1/auth/status`; add a number/email: `POST /v1/me/contact/code`, `/me/contact/verify`; older app builds: `/otp/request`, `/otp/verify`; TOTP: `/mfa/setup`, `/mfa/enable`, `/mfa/disable` |
 | Me | `GET/PATCH/DELETE /v1/me`, `/me/consents`, `/me/professional-profile` (doctor), `/me/organization` (clinic), `/me/export`, `/me/access-log` |
 | Links | `GET /v1/directory/{id}`, `GET/POST /v1/links`, `POST /v1/links/{id}/approve|decline|end`, `GET /v1/linked-patients`, `GET /v1/clinic/doctors` |
 | Health data | `POST /v1/measurements:batch`, `GET /v1/patients/{id}/measurements[/latest]`, `POST /v1/ecg-recordings`, `GET /v1/patients/{id}/ecg-recordings`, `GET /v1/ecg-recordings/{id}[/samples]` (`{id}` may be `me`) |
@@ -713,7 +784,8 @@ Interactive docs at `/docs` (disabled when `ENV=production`); the full spec is `
 | Family sharing | `GET/POST /v1/grants`, `POST /v1/grants/{id}/revoke`, `POST /v1/invites/accept`, `GET /v1/shared-with-me` |
 | Reports | `POST/GET /v1/reports`, `GET /v1/reports/{id}`, `POST /v1/reports/{id}/download-link`, `GET /v1/reports/download/{token}` |
 | Notifications | `GET /v1/notifications`, `POST /v1/notifications/{id}/read`, `/read-all` |
-| Admin | `/v1/admin/users` (+ `/status`, `/email`), `/professionals` (+ `/verify`), `/organizations` (+ `/verify`), `/device-models`, `/ops`, `/audit-events` |
+| Admin | `/v1/admin/stats` (+ `.csv`), `/users` (+ `.csv`, `/{id}/status`, `/email`, `/delete`, `/restore`, `/erase`), `/professionals` (+ `/verify`), `/organizations` (+ `/verify`), `/verification-files/{id}/link`, `/device-models`, `/ops`, `/audit-events` |
+| Verification (doctors, clinics) | `/v1/me/verification`, `/me/verification/files` (+ `/{id}`, `/{id}/link`), `/me/verification/resubmit`, `/v1/verification-files/{token}` |
 | Ops | `GET /healthz` (process up), `GET /readyz` (database reachable) |
 
 ## Configuration
@@ -729,30 +801,26 @@ All settings are environment variables (`app/core/config.py`; locally `.env`, se
 | `WEB_BASE_URL` | `http://localhost:5173` | Base of links in emails (verify, reset). Same host as the API in production |
 | `EMAIL_PROVIDER` | `console` | `console` (log only), `smtp`, `none` |
 | `EMAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD` | — / `587` / `starttls` | SMTP relay (Zoho, Google Workspace, Amazon SES SMTP, Brevo...). `SMTP_TLS`: `starttls`, `ssl`, `none` |
-| `SMS_PROVIDER` | `console` | App sign-in codes: `console` (log), `none` (503 `sms_unavailable`). No real provider yet: plug a DLT-registered one into `app/services/sms.py` |
-| `DEV_EXPOSE_OTP` | `false` | Development only: return SMS codes in the API response |
+| `SMS_PROVIDER` | `console` | One-time codes by SMS: `msg91` (`MSG91_AUTH_KEY`, `MSG91_OTP_TEMPLATE_ID`, optional `MSG91_NOTICE_TEMPLATE_ID`), `twilio` (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`), `console` (log), `none` (sign-up and SMS sign-in answer 503 `sms_unavailable`). Set with [`set_sms.sh`](#scriptsset_smssh) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_EXTRA_CLIENT_IDS` | empty | [Google sign-in](#google-sign-in): the web OAuth client id; app client ids (JSON list). Empty: no Google button |
+| `DEV_EXPOSE_OTP` | `false` | Development only: return one-time codes in API responses (the pages show them) |
 | `STORAGE_BACKEND`, `STORAGE_LOCAL_PATH`, `S3_*` | `local`, `./var/storage` | Where ECG waveforms and PDFs go |
 | `CORS_ORIGINS` | `[]` | Only needed for a web client on another origin (the built-in web app is same-origin) |
 | Documents | `MAX_DOCUMENT_FILES` 10, `MAX_DOCUMENT_FILE_BYTES` 15 MB, `MAX_DOCUMENT_UPLOAD_BYTES` 50 MB, `DOCUMENT_LINK_TTL_S` 600 | Upload limits (nginx `client_max_body_size 55m` must stay above the total) |
-| Lifetimes and limits | see `config.py` | `ACCESS_TOKEN_TTL_S` 900, `REFRESH_TOKEN_TTL_S` 30 d, `EMAIL_VERIFY_TTL_S` 24 h, `PASSWORD_RESET_TTL_S` 1 h, `LOGIN_MAX_FAILURES` 5, `LOGIN_LOCKOUT_S` 900, `MAX_BATCH_SIZE` 100 |
+| Lifetimes and limits | see `config.py` | `ACCESS_TOKEN_TTL_S` 900, `REFRESH_TOKEN_TTL_S` 30 d, `OTP_TTL_S` 10 min, `OTP_MAX_ATTEMPTS` 5, `PASSWORD_RESET_TTL_S` 1 h, `LOGIN_MAX_FAILURES` 5, `LOGIN_LOCKOUT_S` 900, `MAX_BATCH_SIZE` 100 |
 
 ## Connecting the mobile app
 
-The patient app ([cardioSE-WEB](https://github.com/mazumdersayon-del/cardioSE-WEB)) talks to this API when it's built with `EXPO_PUBLIC_API_BASE_URL` set and simulation off (see its README). Its `src/sync/backend.ts`:
+The mobile app ([cardioSE-WEB](https://github.com/mazumdersayon-del/cardioSE-WEB)) is one Expo app for **patients, doctors and clinics**, using the same accounts and API as the web app (see its README). Default server `https://platform.cardiosens.ai`; override at build time with `CS_API_BASE_URL`, or in the app's sign-in screen (Server field). Its `src/api/client.ts`:
 
-1. Signs in with `/v1/auth/otp/request` and `/v1/auth/otp/verify` (plus `/v1/auth/mfa/verify` when two-step sign-in is on). Tokens live in `expo-secure-store` and are refreshed with `/v1/auth/refresh`.
-2. Records onboarding consent with `POST /v1/me/consents` (`data_processing`).
-3. Registers each real device with `POST /v1/devices` on its first sync, with `clientRef` set to the app's local device id, so readings keep using the app's ids. Readings from a device that isn't registered yet stay queued on the phone.
-4. Uploads through `POST /v1/measurements:batch` and reports sync outcomes with `PATCH /v1/devices/{id}/status`.
-5. After sign-in, pulls the profile, devices (`bleIdentifier` lets a reinstalled app reconnect) and the last 30 days of readings.
+1. Same sign-up and sign-in as the web: `/register` → `/register/verify` (codes), `/login/start` → `/login/verify` or `/login` (password), `/google` (ID token from `expo-auth-session`), then `/mfa/verify` for TOTP. Mobile clients get the refresh token in the JSON body (no `X-CS-Web` header); it's kept in `expo-secure-store` and rotated with `/v1/auth/refresh`.
+2. Patients record consent with `POST /v1/me/consents` (`data_processing`) before the dashboard.
+3. Patients: pulls measurements, ECG recordings (+ binary samples), devices, grants, notifications and the access log; registers real devices with `POST /v1/devices` (`clientRef` = the app's local id) and uploads through `POST /v1/measurements:batch`. Server PDF reports (`/v1/reports`), documents, links and invites use the same endpoints as the web.
+4. Doctors/clinics: `/v1/linked-patients` (latest values, last ECG, live status), per-patient measurements/ECG/live ECG/documents, `/v1/links`, `/v1/directory/{id}`, `/v1/clinic/doctors`.
 
-The app's **simulated** readings are refused by design (`reason: Simulated readings are never stored as health data`).
+The app's **simulated** (demo) readings are never uploaded, and the server refuses them anyway (`reason: Simulated readings are never stored as health data`).
 
-To check the app against a running server (development mode, so codes come back in the response):
-
-```bash
-CARDIOSENS_E2E_API=http://127.0.0.1:8000 npx jest backend.e2e   # in the app repository
-```
+For the web preview of the app (`npx expo start --web`, port 8081) against a local API, allow its origin: `CORS_ORIGINS='["http://localhost:8081"]'`. The Android emulator reaches a local API at `http://10.0.2.2:8000` (development build with `CS_ALLOW_HTTP=1`).
 
 ## Deploying to a server
 
@@ -770,6 +838,7 @@ CARDIOSENS_E2E_API=http://127.0.0.1:8000 npx jest backend.e2e   # in the app rep
 | Files | ECG waveforms and PDF reports in `/var/lib/cardiosensai/storage` |
 | nginx + HTTPS | Via [`nginx.sh`](#scriptsnginxsh): web app at `/`, API at `/v1`, Let's Encrypt certificate; check or renew with [`update_ssl.sh`](#scriptsupdate_sslsh) |
 | Backups | Daily at 02:30 (systemd timer): database dump + storage archive in `/var/backups/cardiosensai`, kept 14 days. Plus `pre-migrate-*.dump` before any run that applies a migration |
+| Account purge | Daily at 03:15 (systemd timer `cardiosensai-purge`): erases accounts deleted in the admin portal more than 30 days ago ([`purge_deleted.py`](#appscriptspurge_deletedpy)) |
 | Firewall | ufw: SSH (your configured port), 80 and 443 only |
 
 At the end it checks that the API answers `/readyz`, that nginx passes requests through, and that the web app loads, and prints the URLs.
@@ -786,7 +855,7 @@ All `deploy.sh` options, what it does step by step, and the companion scripts `n
    git clone https://github.com/mazumdersayon-del/cardiosensAI_backend.git
    cd cardiosensAI_backend
    ```
-3. **Email:** production refuses to run without an SMTP relay (sign-up confirmation and password reset depend on it). `cardiosens.ai` mail is on Google Workspace: create an [app password](#scriptsset_smtpsh) for the sending mailbox, then
+3. **SMS and email:** sign-up sends a code by SMS, so set up SMS once with [`set_sms.sh`](#scriptsset_smssh) (DLT template in India). Production also refuses to run without an SMTP relay (email codes and password reset depend on it). Optionally [Google sign-in](#google-sign-in). `cardiosens.ai` mail is on Google Workspace: create an [app password](#scriptsset_smtpsh) for the sending mailbox, then
    ```bash
    sudo bash scripts/set_smtp.sh --user no-reply@cardiosens.ai --no-test   # asks for the app password (hidden)
    ```
@@ -797,7 +866,7 @@ All `deploy.sh` options, what it does step by step, and the companion scripts `n
    sudo bash scripts/deploy.sh --domain app.cardiosens.ai --email ops@cardiosens.ai --admin-email ops@cardiosens.ai --test-email ops@cardiosens.ai
    ```
 5. **Staff account:** open the set-password link (emailed, and printed in the output), choose a password, sign in at https://app.cardiosens.ai, and turn on two-step sign-in under **Account** (required before the admin console works).
-6. **Check:** sign up a test patient, confirm the email arrives, and look at the service log (`journalctl -u cardiosensai-api -f`).
+6. **Check:** sign up a test patient with your mobile number and email, check both codes arrive, and look at the service log (`journalctl -u cardiosensai-api -f`).
 
 ### Updating
 
@@ -828,6 +897,8 @@ systemctl status cardiosensai-api                 # service state
 journalctl -u cardiosensai-api -f                 # live logs (JSON); add --since "1 hour ago" to look back
 sudo systemctl restart cardiosensai-api           # after editing /etc/cardiosensai/backend.env
 sudo systemctl start cardiosensai-backup          # take a backup now
+systemctl list-timers 'cardiosensai-*'            # next backup and account purge
+journalctl -u cardiosensai-purge -n 20            # what the purge erased
 ls -lh /var/backups/cardiosensai                  # backups (same disk: copy them elsewhere regularly)
 sudo -u postgres psql cardiosens                  # database shell
 ```
@@ -867,7 +938,8 @@ Production (`deploy.sh`, `Dockerfile`) installs only `requirements.txt`. Develop
 
 ## Before production
 
-- **SMS provider:** plug a DLT-registered Indian SMS provider into `app/services/sms.py` (only the app's phone sign-in needs it).
+- **SMS provider:** register the DLT entity, sender ID and OTP template, then run [`set_sms.sh`](#scriptsset_smssh). Sign-up can't work without it.
+- **Google sign-in:** create the OAuth client ids and set `GOOGLE_CLIENT_ID` (+ app ids), see [Google sign-in](#google-sign-in).
 - **Verification evidence:** doctors and clinics give registration numbers only; staff check them against the council or state register by hand. Add document upload and a record of what was checked.
 - **CI:** this repository has no CI pipeline yet. Add one that runs ruff, pytest on PostgreSQL, `alembic upgrade head` + `alembic check` + downgrade, and `cd web && npm ci && npm test && npm run build` with a check that `website/` is up to date.
 - **Clinic staff:** a clinic has one login in v1. `organizations` is separate from `users` so staff logins can be added without a schema change.
@@ -892,15 +964,18 @@ app/
   main.py                FastAPI app: middleware, error handlers, /v1 routers, then the web app mount (last)
   website.py             serves website/ at / with SPA fallback, cache headers and CSP
   api/deps.py            current user, role guards (admin needs TOTP), request metadata
-  api/v1/                auth, me, links, devices, measurements, ecg (+ live), documents, sharing, notifications, reports, audit, admin
+  api/v1/                auth, me, verification (licence documents), links, devices, measurements, ecg (+ live), documents, sharing, notifications, reports, audit, admin (portal API)
   core/                  config (+ production guards), db, security, ids, passwords (+ common_passwords.txt), errors, storage, ratelimit, observability
-  models/                user (users, organizations, professional_profiles, consents), link, sharing, auth, device, health, report, notification, audit
+  models/                user (users, organizations, professional_profiles, consents, verification_files), link, sharing, auth, device, health, report, notification, audit
   schemas/               request/response models (camelCase)
-  services/              authz, accounts, ecg (leads, live state, finalize), ecg_synth, ingestion, report_pdf, audit, notifications, email, sms, serializers
+  services/              authz, accounts, erasure (scheduled deletion, erase, purge), stats (admin statistics), otp (one-time codes), google (ID-token check), ecg (leads, live state, finalize), ecg_synth, ingestion, report_pdf, audit, notifications, email, sms (MSG91 / Twilio), serializers
   scripts/seed.py        device models, admin by phone or email, demo data (incl. a 12-lead ECG)
   scripts/simulate_ecg.py  streams a synthetic 12-lead live ECG through the public API
-alembic/                 migrations (0001 initial, 0002 email/roles/links, 0003 12-lead/live ECG/documents)
-tests/                   pytest suite (conftest helpers: login, enable_mfa, make_admin, reading)
+  scripts/purge_deleted.py erases accounts whose 30-day deletion grace period is over (daily timer)
+  scripts/test_email.py  sends one test email with the configured provider
+  scripts/test_sms.py    sends one test SMS code with the configured provider
+alembic/                 migrations (0001 initial, 0002 email/roles/links, 0003 12-lead/live ECG/documents, 0004 admin portal, 0005 code sign-up/sign-in + Google)
+tests/                   pytest suite (conftest helpers: login, enable_mfa, make_admin, reading, upload_licence)
 web/                     web app source (React 19 + Vite + TypeScript)
 website/                 web app build, committed, served at /
 docs/openapi.json        generated API spec
@@ -909,6 +984,8 @@ scripts/
   deploy.sh              single-server install/update for Ubuntu 26.04 (runs nginx.sh)
   nginx.sh               nginx + Let's Encrypt (run by deploy.sh, or on its own)
   update_ssl.sh          create / check / renew the HTTPS certificate
+  set_smtp.sh            outgoing email (SMTP) settings + test email
+  set_sms.sh             SMS provider (MSG91 / Twilio) settings + test code
 Dockerfile, docker-compose.yml   container image and a local compose stack
 pyproject.toml           project metadata, direct dependencies, ruff and pytest settings
 requirements.txt         generated runtime lock

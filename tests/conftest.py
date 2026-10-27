@@ -130,3 +130,13 @@ def make_admin(client: TestClient, phone: str = "+919833333339") -> dict:
     t = login(client, phone)
     enable_mfa(client, t)
     return t
+
+
+PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+
+
+def upload_licence(client, t: dict, name: str = "licence.pdf") -> dict:
+    """Doctors/clinics: upload a registration certificate (needed before an admin can verify them)."""
+    r = client.post("/v1/me/verification/files", files=[("files", (name, PDF, "application/pdf"))], headers=auth(t))
+    assert r.status_code == 201, r.text
+    return r.json()

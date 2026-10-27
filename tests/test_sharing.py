@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from app.core.db import SessionLocal
 from app.models import AccessGrant
-from tests.conftest import auth, enable_mfa, login, make_admin, now, reading, register_device
+from tests.conftest import auth, enable_mfa, login, make_admin, now, reading, register_device, upload_licence
 
 
 def patient_with_data(client):
@@ -112,6 +112,9 @@ def test_doctor_invites_require_verification_by_admin(client):
 
     adm = make_admin(client)
     r = client.post(f"/v1/admin/professionals/{doc['user']['id']}/verify", json={"decision": "verified"}, headers=auth(adm))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "licence_required"  # no licence document yet
+    upload_licence(client, doc)
+    r = client.post(f"/v1/admin/professionals/{doc['user']['id']}/verify", json={"decision": "verified"}, headers=auth(adm))
     assert r.status_code == 204
     # Verified, but doctors also need two-step sign-in before they see patient data.
     assert client.post("/v1/invites/accept", json={"token": g["inviteToken"]}, headers=auth(doc)).status_code == 403
@@ -122,10 +125,11 @@ def test_doctor_invites_require_verification_by_admin(client):
 
     # Admins administer the platform but get no health data — not even via the admin role.
     assert client.get(f"/v1/patients/{pid}/measurements", headers=auth(adm)).status_code == 404
-    users = client.get("/v1/admin/users", headers=auth(adm)).json()
+    users = client.get("/v1/admin/users", headers=auth(adm)).json()["items"]
     assert all("•" in u["phoneMasked"] for u in users)
     allowed = {"id", "uniqueId", "role", "status", "phoneMasked", "emailMasked", "emailVerified", "hasPassword", "fullName", "createdAt"}
-    assert all(set(u) <= allowed | {"deviceCount", "professionalStatus"} for u in users)
+    allowed |= {"mfaEnabled", "organizationName", "lastActiveAt", "eraseAfter", "deviceCount", "verificationStatus"}
+    assert all(set(u) <= allowed for u in users)
     # Patients and doctors can't use admin endpoints.
     assert client.get("/v1/admin/users", headers=auth(doc)).status_code == 403
 

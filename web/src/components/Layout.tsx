@@ -20,7 +20,8 @@ const NAV: Record<string, { to: string; label: string }[]> = {
     { to: '/settings', label: 'Account' },
   ],
   admin: [
-    { to: '/', label: 'Verification' },
+    { to: '/admin', label: 'Overview' },
+    { to: '/admin/verification', label: 'Verification' },
     { to: '/admin/users', label: 'Users' },
     { to: '/settings', label: 'Account' },
   ],
@@ -51,7 +52,7 @@ export default function Layout() {
           </NavLink>
           <nav className="topnav" aria-label="Main">
             {NAV[user.role].map((n) => (
-              <NavLink key={n.to} to={n.to} end={n.to === '/'}>
+              <NavLink key={n.to} to={n.to} end={n.to === '/' || n.to === '/admin'}>
                 {n.label}
               </NavLink>
             ))}

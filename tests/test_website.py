@@ -11,10 +11,26 @@ def test_home_page_is_the_web_app(client):
     assert r.headers["cache-control"] == "no-cache"
     csp = r.headers["content-security-policy"]
     assert "frame-ancestors 'none'" in csp and "connect-src 'self'" in csp and "'sha256-" in csp
+    # Google sign-in: only its /gsi/ script, style, frame and endpoint; the page sends its origin as referrer.
+    assert (
+        "script-src 'self' 'sha256-" in csp
+        and "https://accounts.google.com/gsi/client" in csp
+        and "frame-src https://accounts.google.com/gsi/" in csp
+    )
+    assert r.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert client.get("/healthz").headers["referrer-policy"] == "no-referrer"  # the API keeps no-referrer
 
 
 def test_client_routes_fall_back_to_the_app(client):
-    for path in ("/links", "/settings", "/reset-password?token=abc", "/patients/123"):
+    for path in (
+        "/links",
+        "/settings",
+        "/reset-password?token=abc",
+        "/patients/123",
+        "/admin",
+        "/admin/verification",
+        "/admin/users?status=deleting",
+    ):
         r = client.get(path)
         assert r.status_code == 200 and '<div id="root">' in r.text, path
 

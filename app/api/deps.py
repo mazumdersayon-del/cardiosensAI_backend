@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.errors import forbidden, unauthorized
+from app.core.errors import ApiError, forbidden, unauthorized
 from app.core.security import decode_token
 from app.models import User
 
@@ -25,9 +25,21 @@ def get_current_user(creds: HTTPAuthorizationCredentials | None = Depends(bearer
     user = db.get(User, user_id)
     if user is None or user.status == "deleted":
         raise unauthorized("Session expired or invalid")
-    if user.status == "suspended":
-        raise forbidden("This account is suspended. Contact CardiosensAI support.")
+    if user.status in BLOCKED:
+        raise blocked_error(user)
     return user
+
+
+BLOCKED = ("suspended", "deleting")
+
+
+def blocked_error(user: User) -> ApiError:
+    """Why a suspended or to-be-deleted account can't sign in or call the API."""
+    if user.status == "deleting":
+        return ApiError(
+            403, "account_deleting", "This account has been closed and will be deleted. Contact CardiosensAI support if this is a mistake."
+        )
+    return ApiError(403, "suspended", "This account is suspended. Contact CardiosensAI support.")
 
 
 def require_roles(*roles: str):

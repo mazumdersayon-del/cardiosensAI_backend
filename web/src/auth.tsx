@@ -5,7 +5,8 @@ interface AuthState {
   ready: boolean;
   user: User | null;
   status: AccountStatus | null;
-  login: (email: string, password: string) => Promise<MfaRequired | null>;
+  /** Any sign-in or sign-up step that ends in tokens (code, password, Google, sign-up codes). null = signed in. */
+  signIn: (path: string, body: Record<string, unknown>) => Promise<MfaRequired | null>;
   verifyMfa: (mfaToken: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
   reload: () => Promise<void>;
@@ -48,8 +49,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       status,
       reload,
-      async login(email, password) {
-        const out = await api<TokenOut | MfaRequired>('POST', '/v1/auth/login', { email, password, webSession: true });
+      async signIn(path, body) {
+        const out = await api<TokenOut | MfaRequired>('POST', path, { ...body, webSession: true });
         if ('mfaRequired' in out) return out;
         await adopt(out);
         return null;

@@ -30,15 +30,16 @@
 #   nginx + Let's Encrypt (nginx.sh)     https://DOMAIN: web app (sign-in + dashboards) at /, API at /v1
 #   Daily backups (systemd timer)        /var/backups/cardiosensai (kept 14 days, same disk!), plus a
 #                                        pre-migrate-*.dump before every run that applies a migration
+#   Daily account purge (systemd timer)  cardiosensai-purge: erases admin-deleted accounts after 30 days
 #   Firewall (ufw)                       SSH, HTTP, HTTPS only
 #
 # Options (each can also be given as the environment variable in brackets):
 #   --domain NAME             Public host name, e.g. app.cardiosens.ai [DOMAIN]. Empty: plain HTTP on the server IP.
 #   --email ADDRESS           Let's Encrypt account e-mail; running with it accepts the Let's Encrypt terms [LETSENCRYPT_EMAIL]
 #   --mode production|demo    production (default): production settings. Needs the SMTP settings above
-#                             (refuses to run without them). The app's SMS sign-in can't send codes until
-#                             a provider is added in app/services/sms.py; email sign-in works.
-#                             demo: SMS codes are returned in the API response (anyone can sign in as any
+#                             (refuses to run without them). Sign-up sends an SMS code, so also configure an
+#                             SMS provider once: sudo bash scripts/set_sms.sh (until then nobody can sign up).
+#                             demo: one-time codes are returned in the API response (anyone can sign in as any
 #                             number) and emails go to the service log. Test data only, never real patients. [MODE]
 #   --admin-email ADDRESS     Create or promote this email to a staff (admin) account and email it a
 #                             set-password link; the link is also printed [ADMIN_EMAIL]
@@ -177,8 +178,6 @@ fi
 if [[ $MODE == demo ]]; then
   warn "DEMO MODE: sign-in codes are returned by the API, so anyone can sign in as any phone number."
   warn "Use this server for test data only. Never store real patient data on it."
-else
-  warn "No SMS provider is built in, so the app's phone sign-in can't send codes (email sign-in on the web works)."
 fi
 
 # ---------------------------------------------------------------- packages
@@ -273,7 +272,8 @@ kv_set STORAGE_LOCAL_PATH $DATA_DIR/storage $ENV_FILE
 if [[ $MODE == production ]]; then
   kv_set ENV production $ENV_FILE
   kv_set DEV_EXPOSE_OTP false $ENV_FILE
-  kv_set SMS_PROVIDER none $ENV_FILE
+  # Keep a provider set up with set_sms.sh; otherwise none (sign-up and SMS sign-in then answer 503).
+  [[ $(kv_get SMS_PROVIDER $ENV_FILE) =~ ^(twilio|msg91)$ ]] || kv_set SMS_PROVIDER none $ENV_FILE
   kv_set EMAIL_PROVIDER "$EMAIL_MODE" $ENV_FILE
 else
   kv_set ENV development $ENV_FILE
@@ -400,6 +400,43 @@ EOF
 systemctl daemon-reload
 systemctl enable --now cardiosensai-backup.timer >/dev/null
 
+# ---------------------------------------------------------------- account purge
+log "Scheduling the daily purge of deleted accounts"
+cat >/etc/systemd/system/cardiosensai-purge.service <<EOF
+[Unit]
+Description=CardiosensAI: erase accounts whose 30-day deletion grace period is over
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$ENV_FILE
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=$VENV/bin/python -m app.scripts.purge_deleted
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=$DATA_DIR
+UMask=0027
+EOF
+cat >/etc/systemd/system/cardiosensai-purge.timer <<'EOF'
+[Unit]
+Description=Daily CardiosensAI deleted-account purge
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now cardiosensai-purge.timer >/dev/null
+
 # ---------------------------------------------------------------- firewall
 if [[ $FIREWALL -eq 1 ]]; then
   log "Configuring firewall"
@@ -454,7 +491,10 @@ fi
 if [[ $MODE == demo ]]; then
   warn "Demo mode: sign-in codes are visible to anyone, emails go to the log (journalctl -u $SERVICE). Test data only."
 else
-  [[ $EMAIL_MODE == none ]] && warn "No email relay: new users can't confirm their address and nobody can reset a password. Add SMTP_* to $ENV_FILE and run this script again."
-  warn "The app's phone (SMS) sign-in can't send codes until an SMS provider is added (app/services/sms.py); email sign-in works."
+  [[ $EMAIL_MODE == none ]] && warn "No email relay: email codes and password-reset links can't be sent. Add SMTP_* to $ENV_FILE and run this script again."
+  [[ $(kv_get SMS_PROVIDER $ENV_FILE) =~ ^(twilio|msg91)$ ]] ||
+    warn "No SMS provider yet: nobody can sign up (sign-up sends a code to the mobile number). Run: sudo bash scripts/set_sms.sh --provider msg91 (or twilio)"
+  [[ -n $(kv_get GOOGLE_CLIENT_ID $ENV_FILE) ]] ||
+    echo "Optional: \"Continue with Google\" appears once GOOGLE_CLIENT_ID is set in $ENV_FILE (see README → Google sign-in)."
 fi
 exit 0

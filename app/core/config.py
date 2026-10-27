@@ -24,11 +24,22 @@ class Settings(BaseSettings):
     refresh_token_ttl_s: int = 30 * 24 * 3600
     mfa_token_ttl_s: int = 5 * 60
 
-    otp_ttl_s: int = 5 * 60
+    otp_ttl_s: int = 10 * 60
     otp_max_attempts: int = 5
     # Development convenience: return the OTP in the API response. Refused outside development/test.
     dev_expose_otp: bool = False
-    sms_provider: Literal["console", "none"] = "console"
+    # One-time codes by SMS (sign-up needs a mobile number, sign-in can use it). India: DLT-registered sender + template.
+    sms_provider: Literal["console", "none", "twilio", "msg91"] = "console"
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from: str = ""  # sender number (+1...) or a Messaging Service SID (MG...)
+    msg91_auth_key: str = ""
+    msg91_otp_template_id: str = ""  # DLT template with ##OTP##
+    msg91_notice_template_id: str = ""  # optional: "this number already has an account" notice
+
+    # Google sign-in (Google Identity Services). Web OAuth client ID; app client IDs are also accepted as audience.
+    google_client_id: str = ""
+    google_extra_client_ids: list[str] = Field(default_factory=list)
 
     # Email + password sign-in
     web_base_url: str = "http://localhost:5173"  # where links in emails point (the web app)
@@ -39,7 +50,6 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_tls: Literal["starttls", "ssl", "none"] = "starttls"
-    email_verify_ttl_s: int = 24 * 3600
     password_reset_ttl_s: int = 3600
     login_max_failures: int = 5
     login_lockout_s: int = 15 * 60
@@ -74,6 +84,10 @@ class Settings(BaseSettings):
     rate_limit_window_s: int = 15 * 60
 
     @property
+    def google_audiences(self) -> list[str]:
+        return [a for a in (self.google_client_id, *self.google_extra_client_ids) if a]
+
+    @property
     def secure_cookies(self) -> bool:
         return self.env not in ("development", "test")
 
@@ -89,6 +103,10 @@ class Settings(BaseSettings):
                 problems.append("DEV_EXPOSE_OTP must be false")
             if self.sms_provider == "console":
                 problems.append("SMS_PROVIDER must be a real provider (console only logs codes)")
+            if self.sms_provider == "twilio" and not (self.twilio_account_sid and self.twilio_auth_token and self.twilio_from):
+                problems.append("TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM are required when SMS_PROVIDER=twilio")
+            if self.sms_provider == "msg91" and not (self.msg91_auth_key and self.msg91_otp_template_id):
+                problems.append("MSG91_AUTH_KEY and MSG91_OTP_TEMPLATE_ID are required when SMS_PROVIDER=msg91")
             if self.email_provider == "console":
                 problems.append("EMAIL_PROVIDER must be smtp (console only logs messages, including password-reset links)")
             if self.email_provider == "smtp" and not self.smtp_host:

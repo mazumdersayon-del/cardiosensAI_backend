@@ -10,12 +10,15 @@ export function SetupChecklist() {
   const { status } = useAuth();
   if (!status || !status.missing.length) return null;
   const items = [
-    { key: 'verify_email', text: 'Confirm your email address' },
+    { key: 'verify_contact', text: 'Confirm your mobile number or email address' },
+    { key: 'upload_licence', text: 'Upload your registration / licence certificate under Account' },
     {
       key: 'verification',
       text:
-        status.verificationStatus === 'rejected'
-          ? 'CardiosensAI could not verify your registration. Correct your details under Account.'
+        status.verificationStatus === 'rejected' || status.verificationStatus === 'revoked'
+          ? `CardiosensAI ${status.verificationStatus === 'revoked' ? 'withdrew your verification' : 'could not verify your registration'}${
+              status.verificationNote ? `: ${status.verificationNote}` : ''
+            }. Fix it under Account and submit again.`
           : 'CardiosensAI verifies your registration details (usually within one working day)',
     },
     { key: 'enable_mfa', text: 'Turn on two-step sign-in with an authenticator app' },
@@ -31,9 +34,9 @@ export function SetupChecklist() {
           </li>
         ))}
       </ul>
-      {status.missing.includes('enable_mfa') && (
+      {(status.missing.includes('enable_mfa') || status.missing.includes('upload_licence') || status.verificationNote) && (
         <p style={{ margin: '8px 0 0' }}>
-          <RouterLink to="/settings">Set up two-step sign-in →</RouterLink>
+          <RouterLink to="/settings">Go to Account →</RouterLink>
         </p>
       )}
     </Banner>

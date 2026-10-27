@@ -9,7 +9,7 @@ from app.models.link import CareLink
 from app.models.notification import Notification
 from app.models.report import Report
 from app.models.sharing import AccessGrant, Invite
-from app.models.user import Consent, Organization, ProfessionalProfile, User
+from app.models.user import Consent, Organization, ProfessionalProfile, User, VerificationFile
 
 __all__ = [
     "AccessGrant",
@@ -35,4 +35,5 @@ __all__ = [
     "RefreshToken",
     "Report",
     "User",
+    "VerificationFile",
 ]

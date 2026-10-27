@@ -1,8 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './auth';
 import Layout from './components/Layout';
-import { AdminUsers, AdminVerification } from './pages/Admin';
-import { ForgotPasswordPage, LoginPage, RegisterPage, ResetPasswordPage, VerifyEmailPage } from './pages/AuthPages';
+import { AdminOverview, AdminUsers, AdminVerification } from './pages/Admin';
+import { ForgotPasswordPage, LoginCodePage, LoginPage, RegisterCodePage, RegisterPage, ResetPasswordPage } from './pages/AuthPages';
 import LinksPage from './pages/LinksPage';
 import PatientHome from './pages/PatientHome';
 import { ClinicDoctors, PatientDetail, ProDashboard } from './pages/ProDashboard';
@@ -13,7 +13,7 @@ function Home() {
   const { user } = useAuth();
   if (!user) return <LoginPage />;
   if (user.role === 'patient') return <PatientHome />;
-  if (user.role === 'admin') return <AdminVerification />;
+  if (user.role === 'admin') return <Navigate to="/admin" replace />;
   return <ProDashboard />;
 }
 
@@ -30,7 +30,8 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Navigate to="/" replace />} />
       <Route path="/register" element={user ? <Navigate to="/" replace /> : <RegisterPage />} />
-      <Route path="/verify-email" element={<VerifyEmailPage />} />
+      <Route path="/register/verify" element={user ? <Navigate to="/" replace /> : <RegisterCodePage />} />
+      <Route path="/login/code" element={user ? <Navigate to="/" replace /> : <LoginCodePage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       {user ? (
@@ -40,6 +41,8 @@ export default function App() {
           <Route path="/doctors" element={user.role === 'clinic' ? <ClinicDoctors /> : <Navigate to="/" />} />
           <Route path="/patients/:patientId" element={user.role === 'doctor' || user.role === 'clinic' ? <PatientDetail /> : <Navigate to="/" />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/admin" element={user.role === 'admin' ? <AdminOverview /> : <Navigate to="/" />} />
+          <Route path="/admin/verification" element={user.role === 'admin' ? <AdminVerification /> : <Navigate to="/" />} />
           <Route path="/admin/users" element={user.role === 'admin' ? <AdminUsers /> : <Navigate to="/" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

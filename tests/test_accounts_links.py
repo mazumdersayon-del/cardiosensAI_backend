@@ -7,7 +7,7 @@ import pyotp
 
 from app.core.ids import format_unique_id, luhn_check_digit, new_unique_id, normalize_unique_id
 from app.services import email
-from tests.conftest import auth, enable_mfa, login, make_admin, now, reading
+from tests.conftest import auth, enable_mfa, login, make_admin, now, reading, upload_licence
 
 PW = "heart-rhythm-2026"
 DOCTOR = {"registrationNumber": "WBMC-55821", "council": "West Bengal Medical Council", "specialty": "Cardiology"}
@@ -15,25 +15,35 @@ CLINIC = {"name": "Salt Lake Heart Clinic", "address": "AD-12, Sector 1", "city"
           "phone": "+913340001111"}  # fmt: skip
 
 
-def _token_from_last_email(to: str) -> str:
+def _token_from_last_email(to: str) -> str:  # password-reset links
     msg = next(m for m in reversed(email.outbox) if m.to == to.lower())
     return re.search(r"token=([A-Za-z0-9_\-]+)", msg.body).group(1)
 
 
-def register(client, role: str, addr: str, name: str = "Test User", **extra) -> None:
-    body = {"role": role, "email": addr, "password": PW, "fullName": name, **extra}
+def phone_for(addr: str) -> str:
+    return f"+9197{abs(hash(addr.lower())) % 10**8:08d}"
+
+
+def register(client, role: str, addr: str | None, name: str = "Test User", **extra) -> dict:
+    """Start a sign-up (mobile number always, email when given); returns the signup id and the dev codes."""
+    body = {"role": role, "phone": phone_for(addr or name), "password": PW, "fullName": name, **extra}
+    if addr:
+        body["email"] = addr
     if role == "doctor":
         body.setdefault("doctor", DOCTOR)
     if role == "clinic":
         body.setdefault("clinic", CLINIC)
     r = client.post("/v1/auth/register", json=body)
     assert r.status_code == 202, r.text
+    return r.json()
 
 
-def signup(client, role: str, addr: str, name: str = "Test User", **extra) -> dict:
-    register(client, role, addr, name, **extra)
-    assert client.post("/v1/auth/email/verify", json={"token": _token_from_last_email(addr)}).status_code == 200
-    r = client.post("/v1/auth/login", json={"email": addr, "password": PW})
+def signup(client, role: str, addr: str | None, name: str = "Test User", **extra) -> dict:
+    """Sign up and enter the codes: the account is created, activated and signed in."""
+    s = register(client, role, addr, name, **extra)
+    r = client.post(
+        "/v1/auth/register/verify", json={"signupId": s["signupId"], "phoneCode": s["devPhoneCode"], "emailCode": s["devEmailCode"]}
+    )
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -41,6 +51,7 @@ def signup(client, role: str, addr: str, name: str = "Test User", **extra) -> di
 def ready_professional(client, role: str, addr: str, name: str) -> dict:
     """A doctor or clinic that admin verified and that uses two-step sign-in."""
     t = signup(client, role, addr, name)
+    upload_licence(client, t)
     adm = make_admin(client, f"+9198{abs(hash(addr)) % 10**8:08d}")
     if role == "doctor":
         r = client.post(f"/v1/admin/professionals/{t['user']['id']}/verify", json={"decision": "verified"}, headers=auth(adm))
@@ -72,7 +83,8 @@ def test_unique_ids_have_role_digit_and_valid_check_digit():
 def test_register_verify_login_for_each_role(client):
     p = signup(client, "patient", "Asha@Example.com", "Asha Rao", dateOfBirth="1980-04-02")
     assert p["user"]["role"] == "patient" and p["user"]["uniqueId"].startswith("1") and p["user"]["email"] == "asha@example.com"
-    assert p["user"]["patientCode"].startswith("CS-P-")
+    assert p["user"]["patientCode"].startswith("CS-P-") and p["user"]["phoneVerified"] and p["user"]["emailVerified"]
+    assert p["newAccount"] is True and p["user"]["phone"] == phone_for("asha@example.com")
     d = signup(client, "doctor", "dr.sen@example.com", "Dr. Sen")
     assert d["user"]["uniqueId"].startswith("2")
     c = signup(client, "clinic", "desk@saltlakeheart.in", "Ritu Das")
@@ -80,26 +92,128 @@ def test_register_verify_login_for_each_role(client):
     org = client.get("/v1/me/organization", headers=auth(c)).json()
     assert org["uniqueId"] == c["user"]["uniqueId"] and org["verificationStatus"] == "pending"
     st = client.get("/v1/auth/status", headers=auth(d)).json()
-    assert st["canLink"] is False and set(st["missing"]) == {"verification", "enable_mfa"}
+    assert st["canLink"] is False and set(st["missing"]) == {"upload_licence", "verification", "enable_mfa"}
 
 
-def test_unverified_email_cannot_sign_in_and_register_does_not_leak_accounts(client):
-    register(client, "patient", "new@example.com")
-    r = client.post("/v1/auth/login", json={"email": "new@example.com", "password": PW})
-    assert r.status_code == 403 and r.json()["error"]["code"] == "email_not_verified"
-    # Registering the same address again answers identically and emails the owner instead.
+def test_signup_needs_both_codes_and_does_not_leak_accounts(client):
+    st = register(client, "patient", "new@example.com", "Nisha Rao")
+    assert st["phoneMasked"].endswith(phone_for("new@example.com")[-4:]) and st["emailMasked"].startswith("ne")
+    code_mail = email.outbox[-1]
+    assert code_mail.to == "new@example.com" and st["devEmailCode"] in code_mail.body and "http" not in code_mail.body  # a code, no link
+    body = {"signupId": st["signupId"], "phoneCode": st["devPhoneCode"]}
+    assert client.post("/v1/auth/register/verify", json=body).json()["error"]["code"] == "email_code_required"
+    wrong = "000000" if st["devEmailCode"] != "000000" else "111111"
+    assert client.post("/v1/auth/register/verify", json={**body, "emailCode": wrong}).json()["error"]["code"] == "invalid_code"
+    # Nothing exists until the codes are entered.
+    assert client.post("/v1/auth/login", json={"email": "new@example.com", "password": PW}).status_code == 401
+    r = client.post("/v1/auth/register/verify", json={**body, "emailCode": st["devEmailCode"]})
+    assert r.status_code == 200 and r.json()["user"]["emailVerified"] is True
+    assert client.post("/v1/auth/register/verify", json={**body, "emailCode": st["devEmailCode"]}).status_code == 400  # single use
+
+    # The same number or address again: same answer, but the owner is told instead of getting a code.
     before = len(email.outbox)
-    register(client, "doctor", "NEW@example.com")
+    again = register(client, "doctor", "NEW@example.com", "Someone Else")
+    assert again["devPhoneCode"] is None and again["devEmailCode"] is None
     assert len(email.outbox) == before + 1 and "already have one" in email.outbox[-1].body
+    assert (
+        client.post(
+            "/v1/auth/register/verify", json={"signupId": again["signupId"], "phoneCode": "123456", "emailCode": "123456"}
+        ).status_code
+        == 400
+    )
+    # Confirmation links are gone.
+    assert client.post("/v1/auth/email/verify", json={"token": "x" * 30}).status_code in (404, 405)
 
 
-def test_password_policy(client):
-    r = client.post("/v1/auth/register", json={"role": "patient", "email": "a@example.com", "password": "short", "fullName": "A B"})
-    assert r.json()["error"]["code"] == "weak_password"
-    r = client.post("/v1/auth/register", json={"role": "patient", "email": "a@example.com", "password": "Password123", "fullName": "A B"})
-    assert r.json()["error"]["code"] == "weak_password"
-    r = client.post("/v1/auth/register", json={"role": "doctor", "email": "a@example.com", "password": PW, "fullName": "A B"})
-    assert r.json()["error"]["code"] == "missing_details"
+def test_signup_without_email_and_resend(client):
+    st = register(client, "patient", None, "Phone Only")
+    assert st["emailMasked"] is None and st["devEmailCode"] is None
+    fresh = client.post("/v1/auth/register/resend", json={"signupId": st["signupId"]}).json()
+    assert fresh["signupId"] == st["signupId"]
+    old = client.post("/v1/auth/register/verify", json={"signupId": st["signupId"], "phoneCode": st["devPhoneCode"]})
+    assert old.status_code == 400 or st["devPhoneCode"] == fresh["devPhoneCode"]  # the old code stops working
+    r = client.post("/v1/auth/register/verify", json={"signupId": st["signupId"], "phoneCode": fresh["devPhoneCode"]})
+    assert r.status_code == 200 and r.json()["user"]["email"] is None and r.json()["user"]["phoneVerified"] is True
+    # Later the account adds an email, confirmed with a code.
+    t = r.json()
+    c = client.post("/v1/me/contact/code", json={"kind": "email", "value": "later@example.com"}, headers=auth(t)).json()
+    assert c["devCode"] in email.outbox[-1].body
+    me = client.post("/v1/me/contact/verify", json={"challengeId": c["challengeId"], "code": c["devCode"]}, headers=auth(t)).json()
+    assert me["email"] == "later@example.com" and me["emailVerified"] is True
+
+
+def test_sign_in_with_a_code_by_email_or_sms_or_with_the_password(client):
+    signup(client, "patient", "code@example.com", "Code User")
+    phone = phone_for("code@example.com")
+    by_mail = client.post("/v1/auth/login/start", json={"identifier": " Code@Example.com "}).json()
+    assert by_mail["channel"] == "email" and by_mail["destinationMasked"].startswith("co") and by_mail["devCode"] in email.outbox[-1].body
+    r = client.post("/v1/auth/login/verify", json={"challengeId": by_mail["challengeId"], "code": by_mail["devCode"]})
+    assert r.status_code == 200 and r.json()["user"]["email"] == "code@example.com"
+    assert client.post("/v1/auth/login/verify", json={"challengeId": by_mail["challengeId"], "code": by_mail["devCode"]}).status_code == 400
+
+    spaced = f"{phone[:3]} {phone[3:8]} {phone[8:]}"
+    by_sms = client.post("/v1/auth/login/start", json={"identifier": spaced}).json()
+    assert by_sms["channel"] == "sms" and by_sms["destinationMasked"].endswith(phone[-4:])
+    wrong = "000000" if by_sms["devCode"] != "000000" else "111111"
+    for _ in range(5):
+        client.post("/v1/auth/login/verify", json={"challengeId": by_sms["challengeId"], "code": wrong})
+    assert (
+        client.post("/v1/auth/login/verify", json={"challengeId": by_sms["challengeId"], "code": by_sms["devCode"]}).status_code == 400
+    )  # 5 tries
+    by_sms = client.post("/v1/auth/login/start", json={"identifier": phone}).json()
+    assert client.post("/v1/auth/login/verify", json={"challengeId": by_sms["challengeId"], "code": by_sms["devCode"]}).status_code == 200
+
+    # Unknown addresses get the same answer, and no code is sent.
+    before = len(email.outbox)
+    ghost = client.post("/v1/auth/login/start", json={"identifier": "ghost@example.com"})
+    assert ghost.status_code == 200 and ghost.json()["devCode"] is None and len(email.outbox) == before
+    assert client.post("/v1/auth/login/start", json={"identifier": "98765"}).json()["error"]["code"] == "invalid_identifier"
+
+    # "Use password instead": email or mobile number with the password.
+    assert client.post("/v1/auth/login", json={"identifier": phone, "password": PW}).status_code == 200
+    assert client.post("/v1/auth/login", json={"identifier": "code@example.com", "password": PW}).status_code == 200
+    assert client.post("/v1/auth/login", json={"identifier": phone, "password": "wrong-password-1"}).status_code == 401
+
+
+def test_google_sign_up_and_sign_in(client, monkeypatch):
+    from app.core.config import get_settings
+    from app.services import google
+
+    monkeypatch.setattr(get_settings(), "google_client_id", "web-client.apps.googleusercontent.com")
+    asha, old = "google-id-token-for-asha", "google-id-token-for-old-user"
+    who = {asha: google.GoogleIdentity(sub="g-111", email="asha.g@example.com", name="Asha G"),
+           old: google.GoogleIdentity(sub="g-222", email="old@example.com", name="Old User")}  # fmt: skip
+    monkeypatch.setattr(google, "verify_id_token", lambda tok: who[tok])
+    assert client.get("/v1/auth/options").json() == {"googleClientId": "web-client.apps.googleusercontent.com", "smsAvailable": True}
+
+    r = client.post("/v1/auth/google", json={"credential": asha})
+    assert r.status_code == 404 and r.json()["error"]["code"] == "no_account"
+    # Sign up with Google: no password, the email is Google's (verified); only the mobile number gets a code.
+    body = {"role": "patient", "phone": "+919700000111", "fullName": "Asha G", "googleCredential": asha}
+    st = client.post("/v1/auth/register", json=body).json()
+    assert st["emailMasked"] is None and st["devEmailCode"] is None
+    t = client.post("/v1/auth/register/verify", json={"signupId": st["signupId"], "phoneCode": st["devPhoneCode"]}).json()
+    assert t["user"]["email"] == "asha.g@example.com" and t["user"]["emailVerified"] and t["user"]["googleLinked"]
+    r = client.post("/v1/auth/google", json={"credential": asha, "webSession": True})
+    assert r.status_code == 200 and r.json()["refreshToken"] is None and r.json()["user"]["id"] == t["user"]["id"]
+    assert client.post("/v1/auth/register", json=body).json()["error"]["code"] == "already_registered"
+    # No password yet: one can be set without a current password.
+    assert client.post("/v1/auth/password/change", json={"newPassword": "google-user-pass-2026"}, headers=auth(t)).status_code == 204
+
+    # An existing password account with the same verified address gets linked on first Google sign-in.
+    signup(client, "patient", "old@example.com", "Old User")
+    r = client.post("/v1/auth/google", json={"credential": old})
+    assert r.status_code == 200 and r.json()["user"]["googleLinked"] is True
+
+
+def test_password_policy_and_required_fields(client):
+    base = {"role": "patient", "phone": "+919700000001", "email": "a@example.com", "fullName": "A B"}
+    assert client.post("/v1/auth/register", json={**base, "password": "short"}).json()["error"]["code"] == "weak_password"
+    assert client.post("/v1/auth/register", json={**base, "password": "Password123"}).json()["error"]["code"] == "weak_password"
+    assert client.post("/v1/auth/register", json=base).json()["error"]["code"] == "password_required"
+    assert client.post("/v1/auth/register", json={**base, "role": "doctor", "password": PW}).json()["error"]["code"] == "missing_details"
+    no_phone = {k: v for k, v in base.items() if k != "phone"}
+    assert client.post("/v1/auth/register", json={**no_phone, "password": PW}).status_code == 422  # mobile number is required
 
 
 def test_lockout_after_five_failures(client):
@@ -163,7 +277,7 @@ def test_admin_moves_phone_account_to_email(client):
     app_user = login(client, "+919811112222", "caregiver", "Old App User")
     assert app_user["user"]["role"] == "patient" and app_user["user"]["uniqueId"].startswith("1")  # caregiver folded into patient
     adm = make_admin(client)
-    users = client.get("/v1/admin/users", params={"q": app_user["user"]["uniqueId"]}, headers=auth(adm)).json()
+    users = client.get("/v1/admin/users", params={"q": app_user["user"]["uniqueId"]}, headers=auth(adm)).json()["items"]
     assert users[0]["hasPassword"] is False
     r = client.post(f"/v1/admin/users/{app_user['user']['id']}/email", json={"email": "old.user@example.com"}, headers=auth(adm))
     assert r.status_code == 204

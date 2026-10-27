@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { api, ApiError } from '../api';
+import { useCallback, useState, type ReactNode } from 'react';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { api, ApiError, parseIdentifier, type LoginStarted, type MfaRequired, type SignupStarted } from '../api';
 import { useAuth } from '../auth';
+import GoogleButton, { credentialProfile } from '../components/GoogleButton';
 import { ThemeButton } from '../components/Layout';
 import PhoneInput from '../components/PhoneInput';
 import { Banner, errorText } from '../components/ui';
@@ -29,86 +30,265 @@ function AuthShell({ title, children, sub }: { title: string; sub?: ReactNode; c
   );
 }
 
-export function LoginPage() {
-  const { login, verifyMfa } = useAuth();
+function Or() {
+  return (
+    <div className="row" style={{ gap: 10 }} aria-hidden="true">
+      <span style={{ flex: 1, borderTop: '1px solid var(--line)' }} />
+      <small className="muted">or</small>
+      <span style={{ flex: 1, borderTop: '1px solid var(--line)' }} />
+    </div>
+  );
+}
+
+/** A 6-digit one-time code field. */
+function CodeField({ label, value, onChange, autoFocus }: { label: ReactNode; value: string; onChange: (v: string) => void; autoFocus?: boolean }) {
+  return (
+    <label className="field">
+      {label}
+      <input
+        className="mono"
+        style={{ fontSize: '1.4rem', letterSpacing: '0.4em', textAlign: 'center' }}
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        pattern="\d{6}"
+        maxLength={6}
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 6))}
+        required
+        autoFocus={autoFocus}
+      />
+    </label>
+  );
+}
+
+/** Doctors, clinics, staff (and patients who turned it on): the authenticator-app step after any sign-in. */
+function MfaStep({ mfaToken, onBack }: { mfaToken: string; onBack: () => void }) {
+  const { verifyMfa } = useAuth();
   const nav = useNavigate();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [code, setCode] = useState('');
-  const [err, setErr] = useState<ApiError | string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [resent, setResent] = useState(false);
+  return (
+    <AuthShell title="Two-step sign-in" sub="Enter the 6-digit code from your authenticator app.">
+      <form
+        className="stack"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setErr(null);
+          try {
+            await verifyMfa(mfaToken, code);
+            nav('/', { replace: true });
+          } catch (ex) {
+            setErr(errorText(ex));
+            if (ex instanceof ApiError && ex.status === 401) onBack();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <CodeField label="Authenticator code" value={code} onChange={setCode} autoFocus />
+        {err && <Banner kind="error">{err}</Banner>}
+        <button type="submit" className="btn primary" disabled={busy || code.length !== 6}>
+          {busy ? 'Checking…' : 'Verify'}
+        </button>
+      </form>
+      <button type="button" className="linklike" onClick={onBack}>
+        Start again
+      </button>
+    </AuthShell>
+  );
+}
+
+/** Google's credential → signed in, or (no account yet) on to sign-up with the Google details filled in. */
+function useGoogleSignIn(setErr: (e: string | null) => void) {
+  const { signIn } = useAuth();
+  const nav = useNavigate();
+  const [mfa, setMfa] = useState<MfaRequired | null>(null);
+  const onCredential = useCallback(
+    async (credential: string) => {
+      setErr(null);
+      try {
+        const m = await signIn('/v1/auth/google', { credential });
+        if (m) setMfa(m);
+        else nav('/', { replace: true });
+      } catch (ex) {
+        if (ex instanceof ApiError && ex.code === 'no_account') nav('/register', { state: { googleCredential: credential } });
+        else setErr(errorText(ex));
+      }
+    },
+    [signIn, nav, setErr],
+  );
+  return { onCredential, mfa, clearMfa: () => setMfa(null) };
+}
+
+// ---------------------------------------------------------------- sign-in: step 1
+
+export function LoginPage() {
+  const nav = useNavigate();
+  const [who, setWho] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const google = useGoogleSignIn(setErr);
+  if (google.mfa) return <MfaStep mfaToken={google.mfa.mfaToken} onBack={google.clearMfa} />;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true);
     setErr(null);
+    const id = parseIdentifier(who);
+    if ('error' in id) return setErr(id.error);
+    setBusy(true);
     try {
-      if (mfaToken) {
-        await verifyMfa(mfaToken, code);
-        nav('/', { replace: true });
-      } else {
-        const mfa = await login(email, password);
-        if (mfa) setMfaToken(mfa.mfaToken);
-        else nav('/', { replace: true });
-      }
+      const started = await api<LoginStarted>('POST', '/v1/auth/login/start', { identifier: id.value });
+      nav('/login/code', { state: { started, identifier: id.value } });
     } catch (ex) {
-      setErr(ex instanceof ApiError ? ex : errorText(ex));
-      if (ex instanceof ApiError && ex.status === 401 && mfaToken) setMfaToken(null);
+      setErr(errorText(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  const unverified = err instanceof ApiError && err.code === 'email_not_verified';
   return (
-    <AuthShell title={mfaToken ? 'Two-step sign-in' : 'Sign in'} sub={mfaToken ? 'Enter the 6-digit code from your authenticator app.' : 'Patients, doctors and clinics all sign in here.'}>
+    <AuthShell title="Sign in">
       <form className="stack" onSubmit={submit}>
-        {!mfaToken ? (
-          <>
-            <label className="field">
-              Email
-              <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-            </label>
-            <label className="field">
-              Password
-              <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            </label>
-          </>
-        ) : (
-          <label className="field">
-            Authenticator code
-            <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} required autoFocus />
-          </label>
-        )}
-        {err && <Banner kind="error">{typeof err === 'string' ? err : err.message}</Banner>}
-        {unverified && (
-          <button
-            type="button"
-            className="btn ghost"
-            disabled={resent}
-            onClick={async () => {
-              await api('POST', '/v1/auth/email/resend', { email }).catch(() => undefined);
-              setResent(true);
-            }}
-          >
-            {resent ? 'Sent. Check your inbox' : 'Send the confirmation email again'}
-          </button>
-        )}
+        <label className="field">
+          Email or phone number
+          <input autoComplete="username" inputMode="email" value={who} onChange={(e) => setWho(e.target.value)} required autoFocus />
+        </label>
+        {err && <Banner kind="error">{err}</Banner>}
         <button type="submit" className="btn primary" disabled={busy}>
-          {busy ? 'Signing in…' : mfaToken ? 'Verify' : 'Sign in'}
+          {busy ? 'Sending a code…' : 'Continue'}
         </button>
       </form>
-      {!mfaToken && (
-        <div className="row spread">
-          <Link to="/forgot-password">Forgot password?</Link>
-          <Link to="/register">Create an account</Link>
-        </div>
-      )}
+      <Or />
+      <GoogleButton mode="signin" onCredential={google.onCredential} />
+      <p style={{ textAlign: 'center', margin: 0 }}>
+        New here? <Link to="/register">Create an account</Link>
+      </p>
     </AuthShell>
   );
 }
+
+// ---------------------------------------------------------------- sign-in: step 2 (code, or password instead)
+
+export function LoginCodePage() {
+  const { signIn } = useAuth();
+  const nav = useNavigate();
+  const loc = useLocation() as { state?: { started?: LoginStarted; identifier?: string } };
+  const [started, setStarted] = useState<LoginStarted | undefined>(loc.state?.started);
+  const identifier = loc.state?.identifier ?? '';
+  const [mode, setMode] = useState<'code' | 'password'>('code');
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [mfa, setMfa] = useState<MfaRequired | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (!started || !identifier)
+    return (
+      <AuthShell title="Sign in">
+        <Banner kind="info">Start by entering your email or mobile number.</Banner>
+        <Link to="/" className="btn primary">
+          Go to sign in
+        </Link>
+      </AuthShell>
+    );
+  if (mfa) return <MfaStep mfaToken={mfa.mfaToken} onBack={() => nav('/', { replace: true })} />;
+
+  const viaSms = started.channel === 'sms';
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      const m =
+        mode === 'code'
+          ? await signIn('/v1/auth/login/verify', { challengeId: started!.challengeId, code })
+          : await signIn('/v1/auth/login', { identifier, password });
+      if (m) setMfa(m);
+      else nav('/', { replace: true });
+    } catch (ex) {
+      setErr(errorText(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthShell
+      title={mode === 'code' ? 'Enter your code' : 'Enter your password'}
+      sub={
+        mode === 'code' ? (
+          <>
+            We sent a 6-digit code {viaSms ? 'by SMS to' : 'to'} <strong>{started.destinationMasked}</strong>. It expires in {Math.round(started.expiresInS / 60)} minutes.
+          </>
+        ) : (
+          <>
+            Signing in as <strong>{started.destinationMasked}</strong>
+          </>
+        )
+      }
+    >
+      <form className="stack" onSubmit={submit}>
+        {mode === 'code' ? (
+          <>
+            <CodeField label={viaSms ? 'Code from the SMS' : 'Code from the email'} value={code} onChange={setCode} autoFocus />
+            {started.devCode && <small className="muted">Development: the code is {started.devCode}</small>}
+          </>
+        ) : (
+          <label className="field">
+            Password
+            <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus />
+          </label>
+        )}
+        {err && <Banner kind="error">{err}</Banner>}
+        {note && <Banner kind="ok">{note}</Banner>}
+        <button type="submit" className="btn primary" disabled={busy || (mode === 'code' && code.length !== 6)}>
+          {busy ? 'Signing in…' : 'Sign in'}
+        </button>
+      </form>
+      <div className="row spread">
+        {mode === 'code' ? (
+          <>
+            <button type="button" className="linklike" onClick={() => (setMode('password'), setErr(null))}>
+              Use password instead
+            </button>
+            <button
+              type="button"
+              className="linklike"
+              disabled={busy}
+              onClick={async () => {
+                setErr(null);
+                try {
+                  setStarted(await api<LoginStarted>('POST', '/v1/auth/login/start', { identifier }));
+                  setCode('');
+                  setNote('A new code is on its way.');
+                } catch (ex) {
+                  setErr(errorText(ex));
+                }
+              }}
+            >
+              Send a new code
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="linklike" onClick={() => (setMode('code'), setErr(null))}>
+              Use a one-time code instead
+            </button>
+            <Link to="/forgot-password">Forgot password?</Link>
+          </>
+        )}
+      </div>
+      <Link to="/" style={{ textAlign: 'center' }}>
+        Use a different email or number
+      </Link>
+    </AuthShell>
+  );
+}
+
+// ---------------------------------------------------------------- sign-up
 
 const ROLES = [
   { key: 'patient', label: 'Patient', hint: 'Track your own vitals and share them with your doctor or clinic' },
@@ -117,10 +297,13 @@ const ROLES = [
 ] as const;
 
 export function RegisterPage() {
+  const nav = useNavigate();
+  const loc = useLocation() as { state?: { googleCredential?: string } };
+  const [google, setGoogle] = useState<string | null>(loc.state?.googleCredential ?? null);
+  const fromGoogle = google ? credentialProfile(google) : null;
   const [role, setRole] = useState<'patient' | 'doctor' | 'clinic'>('patient');
-  const [f, setF] = useState<Record<string, string>>({});
+  const [f, setF] = useState<Record<string, string>>(() => ({ fullName: fromGoogle?.name ?? '' }));
   const [err, setErr] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF((s) => ({ ...s, [k]: e.target.value }));
   const field = (k: string, label: string, props: React.InputHTMLAttributes<HTMLInputElement> = {}, hint?: string) => (
@@ -134,35 +317,28 @@ export function RegisterPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
-    if (f.password !== f.password2) {
-      setErr('The two passwords don’t match.');
-      return;
-    }
+    if (!f.phone) return setErr('Enter your mobile number. We send it a code to activate the account.');
+    if (!google && f.password !== f.password2) return setErr('The two passwords don’t match.');
     setBusy(true);
-    const body: Record<string, unknown> = { role, email: f.email, password: f.password, fullName: f.fullName, phone: f.phone || null };
+    const body: Record<string, unknown> = { role, fullName: f.fullName, phone: f.phone };
+    if (google) body.googleCredential = google;
+    else {
+      body.password = f.password;
+      if (f.email) body.email = f.email;
+    }
     if (role === 'patient') body.dateOfBirth = f.dob || null;
     if (role === 'doctor') body.doctor = { registrationNumber: f.reg, council: f.council, specialty: f.specialty || null };
     if (role === 'clinic') body.clinic = { name: f.clinicName, address: f.address, city: f.city, registrationNumber: f.reg, phone: f.clinicPhone };
     try {
-      const out = await api<{ message: string }>('POST', '/v1/auth/register', body);
-      setDone(out.message);
+      const started = await api<SignupStarted>('POST', '/v1/auth/register', body);
+      nav('/register/verify', { state: { started } });
     } catch (ex) {
       setErr(errorText(ex));
+      if (ex instanceof ApiError && ex.code.startsWith('google')) setGoogle(null);
     } finally {
       setBusy(false);
     }
   }
-
-  if (done)
-    return (
-      <AuthShell title="Check your email">
-        <Banner kind="ok">{done}</Banner>
-        <p className="muted">The confirmation link works once and expires in 24 hours.</p>
-        <Link to="/" className="btn ghost">
-          Back to sign in
-        </Link>
-      </AuthShell>
-    );
 
   return (
     <AuthShell title="Create an account" sub="Every account gets a 16-digit CardiosensAI ID that links patients, doctors and clinics.">
@@ -176,15 +352,37 @@ export function RegisterPage() {
       <small className="muted" style={{ textAlign: 'center' }}>
         {ROLES.find((r) => r.key === role)!.hint}
       </small>
+      {google ? (
+        <Banner kind="ok">
+          Signing up with Google as <strong>{fromGoogle?.email}</strong>.{' '}
+          <button type="button" className="linklike" onClick={() => setGoogle(null)}>
+            Use email and password instead
+          </button>
+        </Banner>
+      ) : (
+        <>
+          <GoogleButton
+            mode="signup"
+            onCredential={(c) => {
+              setGoogle(c);
+              const p = credentialProfile(c);
+              setF((x) => ({ ...x, fullName: x.fullName || p.name || '' }));
+            }}
+          />
+          <Or />
+        </>
+      )}
       <form className="stack" onSubmit={submit}>
         {field('fullName', role === 'clinic' ? 'Your name (account manager)' : 'Full name', { required: true, minLength: 2, autoComplete: 'name' })}
-        {field('email', 'Email', { type: 'email', required: true, autoComplete: 'email' })}
-        {field('password', 'Password', { type: 'password', required: true, minLength: 10, autoComplete: 'new-password' }, 'At least 10 characters. Avoid common passwords.')}
-        {field('password2', 'Repeat password', { type: 'password', required: true, autoComplete: 'new-password' })}
-        {role === 'patient' && field('dob', 'Date of birth', { type: 'date', max: new Date().toISOString().slice(0, 10) })}
-        {role !== 'clinic' && (
-          <PhoneInput label="Mobile (optional)" value={f.phone ?? ''} onChange={(v) => setF((x) => ({ ...x, phone: v }))} />
+        <PhoneInput label="Mobile number" hint="We send a code to this number to activate your account." value={f.phone ?? ''} onChange={(v) => setF((x) => ({ ...x, phone: v }))} required />
+        {!google && (
+          <>
+            {field('email', 'Email (optional)', { type: 'email', autoComplete: 'email' }, 'If you add one, it gets its own code too.')}
+            {field('password', 'Password', { type: 'password', required: true, minLength: 10, autoComplete: 'new-password' }, 'At least 10 characters. Avoid common passwords.')}
+            {field('password2', 'Repeat password', { type: 'password', required: true, autoComplete: 'new-password' })}
+          </>
         )}
+        {role === 'patient' && field('dob', 'Date of birth', { type: 'date', max: new Date().toISOString().slice(0, 10) })}
         {role === 'doctor' && (
           <>
             {field('reg', 'Medical registration number', { required: true, minLength: 3 })}
@@ -203,7 +401,7 @@ export function RegisterPage() {
         )}
         {err && <Banner kind="error">{err}</Banner>}
         <button type="submit" className="btn primary" disabled={busy}>
-          {busy ? 'Creating…' : 'Create account'}
+          {busy ? 'Sending codes…' : 'Continue'}
         </button>
       </form>
       <p style={{ textAlign: 'center', margin: 0 }}>
@@ -213,24 +411,92 @@ export function RegisterPage() {
   );
 }
 
-export function VerifyEmailPage() {
-  const [params] = useSearchParams();
-  const [state, setState] = useState<{ kind: 'ok' | 'error' | 'info'; text: string }>({ kind: 'info', text: 'Confirming…' });
-  const sent = useRef(false); // tokens are single-use; never send twice
-  useEffect(() => {
-    if (sent.current) return;
-    sent.current = true;
-    const token = params.get('token') ?? '';
-    api<{ message: string }>('POST', '/v1/auth/email/verify', { token })
-      .then((r) => setState({ kind: 'ok', text: r.message }))
-      .catch((e) => setState({ kind: 'error', text: errorText(e) }));
-  }, [params]);
+export function RegisterCodePage() {
+  const { signIn } = useAuth();
+  const nav = useNavigate();
+  const loc = useLocation() as { state?: { started?: SignupStarted } };
+  const [started, setStarted] = useState<SignupStarted | undefined>(loc.state?.started);
+  const [phoneCode, setPhoneCode] = useState('');
+  const [emailCode, setEmailCode] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!started)
+    return (
+      <AuthShell title="Create an account">
+        <Banner kind="info">Start by filling in the sign-up form.</Banner>
+        <Link to="/register" className="btn primary">
+          Go to sign-up
+        </Link>
+      </AuthShell>
+    );
+  const needEmail = !!started.emailMasked;
   return (
-    <AuthShell title="Email confirmation">
-      <Banner kind={state.kind}>{state.text}</Banner>
-      <Link to="/" className="btn primary">
-        Go to sign in
-      </Link>
+    <AuthShell
+      title="Activate your account"
+      sub={
+        <>
+          Enter the code we sent by SMS to <strong>{started.phoneMasked}</strong>
+          {needEmail && (
+            <>
+              {' '}
+              and the one we emailed to <strong>{started.emailMasked}</strong>
+            </>
+          )}
+          .
+        </>
+      }
+    >
+      <form
+        className="stack"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setErr(null);
+          try {
+            await signIn('/v1/auth/register/verify', { signupId: started.signupId, phoneCode, emailCode: needEmail ? emailCode : null });
+            nav('/', { replace: true });
+          } catch (ex) {
+            setErr(errorText(ex));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <CodeField label="Code from the SMS" value={phoneCode} onChange={setPhoneCode} autoFocus />
+        {started.devPhoneCode && <small className="muted">Development: SMS code {started.devPhoneCode}</small>}
+        {needEmail && (
+          <>
+            <CodeField label="Code from the email" value={emailCode} onChange={setEmailCode} />
+            {started.devEmailCode && <small className="muted">Development: email code {started.devEmailCode}</small>}
+          </>
+        )}
+        {err && <Banner kind="error">{err}</Banner>}
+        {note && <Banner kind="ok">{note}</Banner>}
+        <button type="submit" className="btn primary" disabled={busy || phoneCode.length !== 6 || (needEmail && emailCode.length !== 6)}>
+          {busy ? 'Activating…' : 'Activate and sign in'}
+        </button>
+      </form>
+      <div className="row spread">
+        <button
+          type="button"
+          className="linklike"
+          onClick={async () => {
+            setErr(null);
+            try {
+              setStarted(await api<SignupStarted>('POST', '/v1/auth/register/resend', { signupId: started.signupId }));
+              setPhoneCode('');
+              setEmailCode('');
+              setNote('New codes are on their way. The old ones no longer work.');
+            } catch (ex) {
+              setErr(errorText(ex));
+            }
+          }}
+        >
+          Send new codes
+        </button>
+        <Link to="/register">Change details</Link>
+      </div>
     </AuthShell>
   );
 }

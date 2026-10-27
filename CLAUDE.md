@@ -3,14 +3,14 @@
 Condensed context. README.md is the full reference (architecture, data model, API, deploy); read the relevant section there instead of re-deriving it from code.
 
 ## What this is
-FastAPI + PostgreSQL API (`/v1`) and a React SPA (`/`) in one deployable. Roles: **patient, doctor, clinic** (self sign-up) + **admin** (staff). Everyone has a **16-digit ID** (role digit 1/2/3/9 + 14 random + Luhn). Health data. Not for clinical use. Production runs on one Ubuntu 26.04 server with **real users**.
+FastAPI + PostgreSQL API (`/v1`) and a React SPA (`/`, staff portal at `/admin`) in one deployable. Roles: **patient, doctor, clinic** (self sign-up) + **admin** (staff). Everyone has a **16-digit ID** (role digit 1/2/3/9 + 14 random + Luhn). Health data. Not for clinical use. Production runs on one Ubuntu 26.04 server with **real users**.
 
 ## Commands (every script and option: README → "Scripts")
 ```bash
 bash scripts/run_local.sh [--dev] [--reset]        # Docker PG :55433 + migrations + demo data + API :8000 (+ Vite :5173)
 bash scripts/run_local.sh totp                     # demo doctor/clinic TOTP code; demo password cardiosens-demo-2026
 bash scripts/run_local.sh ecg-live 120             # stream a synthetic 12-lead live ECG for the demo patient
-.venv/bin/pytest -q                     # 64 tests, SQLite; TEST_DATABASE_URL=postgresql+psycopg://... for PG
+.venv/bin/pytest -q                     # 78 tests, SQLite; TEST_DATABASE_URL=postgresql+psycopg://... for PG
 .venv/bin/ruff check . && .venv/bin/ruff format --check .   # line length 140
 cd web && npm test && npm run typecheck && npm run build    # build writes ../website (committed)
 .venv/bin/alembic revision --autogenerate -m "..."  && alembic check   # after model changes, against PG
@@ -23,10 +23,12 @@ Done = ruff clean + pytest green (ideally also on PG) + web typecheck/test/build
 ## Invariants (do not break)
 - **`services/authz.get_access` is the only gate for health data.** Access = patient self, or an active unexpired `access_grant`. Doctor/clinic viewers also need `accounts.can_view_patients` (staff-verified + TOTP + active), re-checked on every request. Admins never get health data. No-permission answers are 404, not 403, for patient lookups.
 - **Links never grant access directly.** Activating a patient `care_link` creates an `AccessGrant`; ending it revokes that grant. Both sides approve; requester's side is implied. Clinic links do not extend to its doctors.
-- `can_link` requires confirmed email; doctors/clinics also verification + TOTP. TOTP can't be disabled for doctor/clinic/admin; `require_admin` requires TOTP.
-- Register / forgot-password / resend never reveal whether an account exists. Emailed tokens and refresh tokens are stored as SHA-256 only, single use.
+- `can_link` requires a confirmed mobile number or email (`accounts.is_activated`); doctors/clinics also a licence file + verification + TOTP. TOTP can't be disabled for doctor/clinic/admin; `require_admin` requires TOTP.
+- Sign-up: mobile number required, email optional; codes by SMS (+ email) and the account is created only in `/auth/register/verify` (pending data waits in `otp_challenges.payload`). No email confirmation links. Sign-in: `/auth/login/start` (email → email code, number → SMS) + `/login/verify`, or `/login` (password, email or number), or `/auth/google` (ID token, `services/google.py`). Register / login-start / forgot-password never reveal whether an account exists (taken number/email → notice instead of a code). Codes: HMAC only, 10 min, 5 tries, single use (`services/otp.py`). Emailed tokens and refresh tokens are stored as SHA-256 only, single use. Production needs `SMS_PROVIDER` msg91|twilio (`scripts/set_sms.sh`) or nobody can sign up.
 - Web session: refresh token only in httpOnly SameSite=Strict cookie (`/v1/auth`) + `X-CS-Web: 1` header; access token in memory only.
 - Audit events and logs never contain health values; logs use route templates, not URLs.
+- Admin portal (`/admin`, `api/v1/admin.py`): counts and account details only, never health values; every action audited; emails masked except an explicit, audited CSV export. Verify needs ≥ 1 licence file (`verification_files`, owner + staff only, signed links); reject/revoke need a reason (stored in `review_note`, emailed). Transitions: verified ← any other; rejected ← pending; revoked ← verified; resubmit → pending.
+- Deletion: admin delete = status `deleting` + `erase_after` (+30 d), sessions ended, data/links kept so Restore works; anything checking `status == "active"` already hides it. Erasure is one function, `services/erasure.erase_account` (self-delete, "erase now", daily `app/scripts/purge_deleted.py` timer). Admin accounts can't be deleted from the portal. New per-user tables must be added to `erase_account`.
 - Documents: visible to the patient and doctor/clinic grants only (not family shares); type by content signature (PDF/JPEG only); only doctors comment; files via signed links. Live ECG: polling (no WebSocket), chunks idempotent on seq, `services/ecg.finalize` turns a session into a recording; high-frequency views log once per viewer (`ecg.live_view`, `dashboard.summary` hourly).
 - ECG samples are interleaved int16 frames in `leads` order; `sample_count` = frames.
 - Timestamps are UTC (`UTCDateTime` rejects naive datetimes). Measurement ingestion is idempotent on `(patient_id, client_id)`.
@@ -44,9 +46,9 @@ Done = ruff clean + pytest green (ideally also on PG) + web typecheck/test/build
 - After changing `web/`, commit the rebuilt `website/` too (servers have no Node).
 
 ## Deploy (README "Deploying")
-`git pull && sudo bash scripts/deploy.sh` on the server. Production needs SMTP in `/etc/cardiosensai/backend.env` (`sudo bash scripts/set_smtp.sh --user no-reply@cardiosens.ai`: Google Workspace, app password, hidden prompt; never put passwords in repo files or chat); deploy dumps the DB before pending migrations. `nginx.sh` handles nginx + Let's Encrypt for `app.cardiosens.ai`; `sudo bash scripts/update_ssl.sh [--check|--force|--dry-run]` creates/checks/renews the certificate (certbot.timer renews automatically). Never run demo mode or demo data against production. Don't deploy, push or run migrations on the server without the user's go-ahead.
+`git pull && sudo bash scripts/deploy.sh` on the server. Production needs SMTP in `/etc/cardiosensai/backend.env` (`sudo bash scripts/set_smtp.sh --user no-reply@cardiosens.ai`: Google Workspace, app password, hidden prompt; never put passwords in repo files or chat) and SMS (`sudo bash scripts/set_sms.sh --provider msg91 --template ID`; optional `GOOGLE_CLIENT_ID`); deploy dumps the DB before pending migrations. `nginx.sh` handles nginx + Let's Encrypt for `app.cardiosens.ai`; `sudo bash scripts/update_ssl.sh [--check|--force|--dry-run]` creates/checks/renews the certificate (certbot.timer renews automatically). Never run demo mode or demo data against production. Don't deploy, push or run migrations on the server without the user's go-ahead.
 
 ## Related
-- Patient app: `../cardioSE-WEB` (Expo; still uses phone OTP — `/v1/auth/otp/*` must keep working).
+- Mobile app: `../cardioSE-WEB` (Expo; one app for patient/doctor/clinic, same code / password / Google sign-in + TOTP, refresh token in the JSON body). Older installs use phone OTP — keep `/v1/auth/otp/*` working. Web pages' CSP allows Google Identity Services only (`app/website.py`).
 - Old marketing page archive: `../../Assets/V1.0/`.
 - `credential.txt` (git-ignored) lists local demo accounts and IDs.

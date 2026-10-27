@@ -21,13 +21,16 @@ WEBSITE_DIR = Path(__file__).resolve().parents[1] / "website"
 API_PREFIXES = ("v1/", "v1", "docs", "redoc", "openapi.json", "healthz", "readyz")
 
 # The page itself: no framing, no inline script other than the theme bootstrap, API on the same origin only.
+# Google Identity Services (the "Sign in with Google" button) is the one outside origin: its script, style,
+# iframe and endpoint under accounts.google.com/gsi/, and it needs the page origin in the referrer.
+GSI = "https://accounts.google.com/gsi/"
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
-        "default-src 'self'; script-src 'self' 'sha256-{theme}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        f"default-src 'self'; script-src 'self' 'sha256-{{theme}}' {GSI}client; style-src 'self' 'unsafe-inline' {GSI}style; "
+        f"img-src 'self' data:; connect-src 'self' {GSI}; frame-src {GSI}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     ),
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "same-origin",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
     "X-Frame-Options": "DENY",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 }

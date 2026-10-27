@@ -157,6 +157,9 @@ main.page { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
 label.field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; color: var(--heading); font-size: 0.9rem; }
 label.field small { font-weight: 400; }
 input, select, textarea { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; min-height: 44px; width: 100%; }
+input[type='checkbox'], input[type='radio'] { width: auto; min-height: 0; padding: 0; accent-color: var(--primary); }
+.filters > input, .filters > select { width: auto; flex: 1 1 160px; }
+.filters > input:first-child { flex: 3 1 260px; }
 input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent); outline-offset: 2px; }
 .btn { font: inherit; font-weight: 650; border-radius: 10px; min-height: 44px; padding: 0 18px; border: 1px solid transparent; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; }
 .btn.primary { background: var(--primary); color: var(--primary-ink); }

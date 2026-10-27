@@ -87,6 +87,9 @@ export interface User {
   phone: string | null;
   email: string | null;
   emailVerified: boolean;
+  phoneVerified: boolean;
+  googleLinked: boolean;
+  hasPassword: boolean;
   organizationId: string | null;
   fullName: string | null;
   dateOfBirth: string | null;
@@ -114,7 +117,8 @@ export interface AccountStatus {
   emailVerified: boolean;
   mfaEnabled: boolean;
   mfaRequired: boolean;
-  verificationStatus: 'pending' | 'verified' | 'rejected' | 'missing' | null;
+  verificationStatus: VerificationStatus | 'missing' | null;
+  verificationNote: string | null;
   canLink: boolean;
   canViewPatients: boolean;
   missing: string[];
@@ -224,14 +228,16 @@ export interface Organization {
   city: string | null;
   registrationNumber: string | null;
   phone: string | null;
-  verificationStatus: 'pending' | 'verified' | 'rejected';
+  verificationStatus: VerificationStatus;
+  reviewNote: string | null;
 }
 
 export interface ProfessionalProfile {
   registrationNumber: string;
   council: string;
   specialty: string | null;
-  verificationStatus: 'pending' | 'verified' | 'rejected';
+  verificationStatus: VerificationStatus;
+  reviewNote: string | null;
 }
 
 export interface EcgLive {
@@ -301,4 +307,188 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
     throw new ApiError(res.status, err?.code ?? 'error', err?.message ?? `Upload failed (${res.status})`);
   }
   return data as T;
+}
+
+// ---------------------------------------------------------------- verification and admin portal
+
+export type VerificationStatus = 'pending' | 'verified' | 'rejected' | 'revoked';
+
+export interface LicenceFile {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  uploadedAt: string;
+}
+
+export interface MyVerification {
+  status: VerificationStatus | 'missing';
+  reviewNote: string | null;
+  files: LicenceFile[];
+  maxFiles: number;
+  canResubmit: boolean;
+}
+
+export interface AdminUser {
+  id: string;
+  uniqueId: string | null;
+  role: Role;
+  status: 'active' | 'suspended' | 'deleting' | 'deleted';
+  phoneMasked: string | null;
+  emailMasked: string | null;
+  emailVerified: boolean;
+  hasPassword: boolean;
+  mfaEnabled: boolean;
+  fullName: string | null;
+  organizationName: string | null;
+  createdAt: string;
+  lastActiveAt: string | null;
+  eraseAfter: string | null;
+  deviceCount: number;
+  verificationStatus: VerificationStatus | 'missing' | null;
+}
+
+export interface AdminUserPage {
+  items: AdminUser[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface DoctorReview {
+  userId: string;
+  uniqueId: string | null;
+  fullName: string | null;
+  emailMasked: string | null;
+  accountStatus: string;
+  registrationNumber: string;
+  council: string;
+  specialty: string | null;
+  verificationStatus: VerificationStatus;
+  reviewNote: string | null;
+  submittedAt: string;
+  decidedAt: string | null;
+  files: LicenceFile[];
+}
+
+export interface ClinicReview {
+  id: string;
+  uniqueId: string;
+  name: string;
+  address: string | null;
+  city: string | null;
+  registrationNumber: string | null;
+  phoneMasked: string | null;
+  ownerUserId: string | null;
+  ownerName: string | null;
+  ownerEmailMasked: string | null;
+  accountStatus: string | null;
+  verificationStatus: VerificationStatus;
+  reviewNote: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  files: LicenceFile[];
+}
+
+type ByRole = Record<'patient' | 'doctor' | 'clinic' | 'admin', number>;
+interface Volume {
+  total: number;
+  period: number;
+}
+
+export interface PlatformStats {
+  generatedAt: string;
+  days: number;
+  users: { total: number; byRole: Record<string, Record<string, number>>; emailVerified: ByRole; mfaEnabled: ByRole };
+  verification: { doctors: Record<string, number>; clinics: Record<string, number> };
+  growth: { bucket: 'day' | 'week'; points: { start: string; patient: number; doctor: number; clinic: number }[]; newInPeriod: Record<string, number> };
+  activity: {
+    activeDay: ByRole;
+    activeWeek: ByRole;
+    activeMonth: ByRole;
+    activeInPeriod: ByRole;
+    patientsWithReadings: number;
+    patientsWithEcg: number;
+    patientsWithDevices: number;
+  };
+  volume: Record<'measurements' | 'ecgRecordings' | 'liveEcgSessions' | 'documents' | 'reports' | 'devices' | 'careLinks' | 'familyShares', Volume>;
+}
+
+/** Download an authenticated file (CSV exports) and save it under its server-given name. */
+export async function apiDownload(path: string, fallbackName: string): Promise<void> {
+  const send = () => raw('GET', path);
+  let res = await send();
+  if (res.status === 401 && (await refreshSession())) res = await send();
+  if (!res.ok) {
+    const data = (await parse(res)) as { error?: { code?: string; message?: string } } | null;
+    throw new ApiError(res.status, data?.error?.code ?? 'error', data?.error?.message ?? `Download failed (${res.status})`);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** Open a short-lived signed link in a new tab. The tab opens first so the browser doesn't block it as a pop-up. */
+export async function openSignedLink(getLink: () => Promise<{ url: string }>): Promise<void> {
+  const w = window.open('', '_blank');
+  try {
+    const { url } = await getLink();
+    if (w) {
+      w.opener = null;
+      w.location.href = url;
+    }
+  } catch (e) {
+    w?.close();
+    throw e;
+  }
+}
+
+// ---------------------------------------------------------------- sign-up and sign-in with codes
+
+export interface AuthOptions {
+  googleClientId: string | null;
+  smsAvailable: boolean;
+}
+
+export interface SignupStarted {
+  signupId: string;
+  phoneMasked: string;
+  emailMasked: string | null;
+  expiresInS: number;
+  devPhoneCode?: string | null;
+  devEmailCode?: string | null;
+}
+
+export interface LoginStarted {
+  challengeId: string;
+  channel: 'sms' | 'email';
+  destinationMasked: string;
+  expiresInS: number;
+  devCode?: string | null;
+}
+
+let optionsPromise: Promise<AuthOptions> | null = null;
+export function authOptions(): Promise<AuthOptions> {
+  optionsPromise ??= api<AuthOptions>('GET', '/v1/auth/options').catch(() => {
+    optionsPromise = null;
+    return { googleClientId: null, smsAvailable: true };
+  });
+  return optionsPromise;
+}
+
+/** What someone typed in "Email or mobile number": an email, or an E.164 number (10 digits = India). */
+export function parseIdentifier(raw: string): { kind: 'email' | 'phone'; value: string } | { error: string } {
+  const v = raw.trim();
+  if (v.includes('@')) return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? { kind: 'email', value: v.toLowerCase() } : { error: 'That email address doesn’t look right.' };
+  let d = v.replace(/[\s\-().]/g, '');
+  if (/^0\d{10}$/.test(d)) d = d.slice(1);
+  if (/^\d{10}$/.test(d)) d = `+91${d}`;
+  else if (/^00[1-9]\d{7,14}$/.test(d)) d = `+${d.slice(2)}`;
+  return /^\+[1-9]\d{7,14}$/.test(d) ? { kind: 'phone', value: d } : { error: 'Enter your email address, or your mobile number with the country code (e.g. +91 98765 43210).' };
 }

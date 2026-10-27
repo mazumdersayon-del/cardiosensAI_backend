@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Organization, type ProfessionalProfile } from '../api';
 import { useAuth } from '../auth';
+import { ContactDetails } from '../components/Contact';
+import { LicenceSection } from '../components/Licence';
 import PhoneInput from '../components/PhoneInput';
 import { MfaSetup } from '../components/Setup';
 import { Banner, errorText, StatusPill } from '../components/ui';
@@ -42,10 +44,6 @@ function Profile() {
           <dt className="muted">Account type</dt>
           <dd style={{ margin: 0 }}>{ROLE_LABEL[user.role]}</dd>
         </div>
-        <div>
-          <dt className="muted">Sign-in email</dt>
-          <dd style={{ margin: 0 }}>{user.email}</dd>
-        </div>
       </dl>
       <label className="field">
         {user.role === 'clinic' ? 'Your name' : 'Full name'}
@@ -74,7 +72,7 @@ function Profile() {
 }
 
 function DoctorDetails() {
-  const { reload } = useAuth();
+  const { reload, status } = useAuth();
   const [p, setP] = useState<ProfessionalProfile | null>(null);
   const [f, setF] = useState({ registrationNumber: '', council: '', specialty: '' });
   const [msg, setMsg] = useState<Msg>(null);
@@ -101,7 +99,7 @@ function DoctorDetails() {
       }}
     >
       <div className="row">
-        Verification: <StatusPill status={p?.verificationStatus ?? 'missing'} />
+        Verification: <StatusPill status={status?.verificationStatus ?? p?.verificationStatus ?? 'missing'} />
       </div>
       <label className="field">
         Medical registration number
@@ -127,7 +125,7 @@ function DoctorDetails() {
 }
 
 function ClinicDetails() {
-  const { reload } = useAuth();
+  const { reload, status } = useAuth();
   const [o, setO] = useState<Organization | null>(null);
   const [f, setF] = useState({ name: '', address: '', city: '', registrationNumber: '', phone: '' });
   const [msg, setMsg] = useState<Msg>(null);
@@ -160,7 +158,7 @@ function ClinicDetails() {
       }}
     >
       <div className="row">
-        Verification: <StatusPill status={o?.verificationStatus} /> <span className="muted mono">Clinic ID {formatId(o?.uniqueId)}</span>
+        Verification: <StatusPill status={status?.verificationStatus ?? o?.verificationStatus} /> <span className="muted mono">Clinic ID {formatId(o?.uniqueId)}</span>
       </div>
       {input('name', 'Clinic name', { minLength: 2 })}
       {input('address', 'Address', { minLength: 3 })}
@@ -179,7 +177,8 @@ function ClinicDetails() {
 }
 
 function ChangePassword() {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
+  const has = user?.hasPassword !== false;
   const [cur, setCur] = useState('');
   const [pw, setPw] = useState('');
   const [msg, setMsg] = useState<Msg>(null);
@@ -189,18 +188,22 @@ function ChangePassword() {
       onSubmit={async (e) => {
         e.preventDefault();
         try {
-          await api('POST', '/v1/auth/password/change', { currentPassword: cur, newPassword: pw });
-          setMsg({ kind: 'ok', text: 'Password changed. Signing you out of every device…' });
+          await api('POST', '/v1/auth/password/change', { currentPassword: has ? cur : null, newPassword: pw });
+          setMsg({ kind: 'ok', text: `Password ${has ? 'changed' : 'set'}. Signing you out of every device…` });
           setTimeout(() => logout(), 1500);
         } catch (ex) {
           setMsg({ kind: 'error', text: errorText(ex) });
         }
       }}
     >
-      <label className="field">
-        Current password
-        <input type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} required />
-      </label>
+      {has ? (
+        <label className="field">
+          Current password
+          <input type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} required />
+        </label>
+      ) : (
+        <small className="muted">You sign in with Google or one-time codes. Set a password to also sign in with it.</small>
+      )}
       <label className="field">
         New password
         <input type="password" autoComplete="new-password" minLength={10} value={pw} onChange={(e) => setPw(e.target.value)} required />
@@ -208,7 +211,7 @@ function ChangePassword() {
       {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
       <div>
         <button type="submit" className="btn primary">
-          Change password
+          {has ? 'Change password' : 'Set password'}
         </button>
       </div>
     </form>
@@ -226,6 +229,10 @@ export default function Settings() {
         <Profile />
       </section>
       <section className="card span-6">
+        <h2>Mobile and email</h2>
+        <ContactDetails />
+      </section>
+      <section className="card span-6">
         <h2>Two-step sign-in</h2>
         <MfaSetup />
       </section>
@@ -239,6 +246,12 @@ export default function Settings() {
         <section className="card span-6">
           <h2>Clinic details</h2>
           <ClinicDetails />
+        </section>
+      )}
+      {(user.role === 'doctor' || user.role === 'clinic') && (
+        <section className="card span-6">
+          <h2>Verification documents</h2>
+          <LicenceSection />
         </section>
       )}
       <section className="card span-6">

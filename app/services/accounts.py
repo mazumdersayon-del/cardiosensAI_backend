@@ -1,21 +1,22 @@
 """Account helpers shared by sign-up, the link API and admin tools.
 
 Eligibility rules (one place, used by the API and the web app's status banner):
-- Everyone needs a verified email address before they can request or approve links.
+- Everyone needs a confirmed mobile number or email address (one-time code) before they can request or approve links.
 - Doctors and clinics also need CardiosensAI verification AND two-step sign-in (TOTP) before
   they can link to patients or see any patient data. Until then they can sign in and finish setup.
 - Admins never link and never see health data.
 """
 
+import uuid
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.db import utcnow
 from app.core.ids import new_unique_id
 from app.core.security import new_token, sha256_hex
-from app.models import ActionToken, Organization, ProfessionalProfile, User
+from app.models import ActionToken, Organization, ProfessionalProfile, User, VerificationFile
 from app.schemas.auth import AccountStatusOut
 
 
@@ -56,6 +57,19 @@ def organization_of(db: Session, user: User) -> Organization | None:
     return db.get(Organization, user.organization_id) if user.role == "clinic" and user.organization_id else None
 
 
+def licence_file_count(db: Session, user_id: uuid.UUID) -> int:
+    """Licence files uploaded by a doctor or a clinic's login (needed before CardiosensAI can verify them)."""
+    return db.scalar(select(func.count()).select_from(VerificationFile).where(VerificationFile.user_id == user_id)) or 0
+
+
+def review_note(db: Session, user: User) -> str | None:
+    if user.role == "doctor":
+        prof = db.get(ProfessionalProfile, user.id)
+        return prof.review_note if prof else None
+    org = organization_of(db, user)
+    return org.review_note if org else None
+
+
 def verification_status(db: Session, user: User) -> str | None:
     if user.role == "doctor":
         prof = db.get(ProfessionalProfile, user.id)
@@ -66,14 +80,21 @@ def verification_status(db: Session, user: User) -> str | None:
     return None
 
 
+def is_activated(user: User) -> bool:
+    """Proved a mobile number or email address with a one-time code (or Google, or a password-reset link)."""
+    return user.phone_verified_at is not None or user.email_verified_at is not None
+
+
 def account_status(db: Session, user: User) -> AccountStatusOut:
     missing: list[str] = []
     email_ok = user.email_verified_at is not None
-    if not email_ok:
-        missing.append("verify_email")
+    if not is_activated(user):
+        missing.append("verify_contact")
     professional = user.role in ("doctor", "clinic")
     vstatus = verification_status(db, user)
     if professional:
+        if vstatus != "verified" and licence_file_count(db, user.id) == 0:
+            missing.append("upload_licence")
         if vstatus != "verified":
             missing.append("verification")
         if not user.mfa_enabled:
@@ -88,6 +109,7 @@ def account_status(db: Session, user: User) -> AccountStatusOut:
         mfa_enabled=user.mfa_enabled,
         mfa_required=professional or user.role == "admin",
         verification_status=vstatus,
+        verification_note=review_note(db, user) if vstatus in ("rejected", "revoked") else None,
         can_link=can_link,
         can_view_patients=can_link and professional,
         missing=missing,

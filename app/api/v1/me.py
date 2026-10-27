@@ -1,37 +1,45 @@
-"""The signed-in user's own profile, consents, professional verification, data export and deletion."""
+"""The signed-in user's own profile, contact details, consents, professional verification, data export and deletion."""
 
+import re
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequestMeta, get_current_user, request_meta
+from app.core.config import get_settings
 from app.core.db import get_db, utcnow
-from app.core.errors import bad_request, not_found
+from app.core.errors import bad_request, conflict, not_found
+from app.core.ratelimit import limiter
 from app.core.storage import get_storage
 from app.models import (
     AccessGrant,
-    CareLink,
     Consent,
     Device,
-    Document,
-    DocumentComment,
-    DocumentFile,
-    EcgLiveChunk,
-    EcgLiveSession,
     EcgRecording,
-    Invite,
     Measurement,
-    Notification,
     Organization,
     ProfessionalProfile,
-    RefreshToken,
-    Report,
     User,
 )
-from app.schemas.auth import ConsentIn, ConsentOut, OrganizationIn, OrganizationOut, ProfessionalIn, ProfessionalOut, UserOut, UserUpdateIn
-from app.services import audit
+from app.schemas.auth import (
+    E164,
+    ConsentIn,
+    ConsentOut,
+    ContactCodeIn,
+    ContactCodeOut,
+    ContactVerifyIn,
+    OrganizationIn,
+    OrganizationOut,
+    ProfessionalIn,
+    ProfessionalOut,
+    UserOut,
+    UserUpdateIn,
+)
+from app.services import audit, otp, sms
+from app.services.email import mask_email
+from app.services.erasure import erase_account
 from app.services.serializers import device_out, ecg_out, grant_out, measurement_out, organization_out, user_out
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -58,17 +66,64 @@ def update_me(body: UserUpdateIn, user: User = Depends(get_current_user), db: Se
             else:
                 raise bad_request("invalid_preference", f"Unsupported preference: {k}")
         user.preferences = prefs
-    if "email" in data:
-        new = (data.pop("email") or "").lower() or None
-        if new != user.email:
-            if user.email is not None:
-                raise bad_request("email_locked", "The sign-in email can't be changed here. Contact CardiosensAI support")
-            if new and db.scalar(select(User.id).where(func.lower(User.email) == new)) is not None:
-                raise bad_request("email_taken", "This email address can't be used")
-            user.email = new
-            user.email_verified_at = None
     for field, value in data.items():
         setattr(user, field, value)
+    db.commit()
+    return user_out(user)
+
+
+@router.post("/contact/code", response_model=ContactCodeOut, summary="Add a mobile number or email to this account: sends a code to it")
+def contact_code(
+    body: ContactCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+) -> ContactCodeOut:
+    """Only while the account has none: the sign-in email and mobile number aren't changed here (CardiosensAI support does that)."""
+    s = get_settings()
+    limiter.hit(f"contact-code:{user.id}", 5, 3600)
+    if body.kind == "email":
+        value = body.value.strip().lower()
+        if "@" not in value or len(value) < 6:
+            raise bad_request("invalid_email", "That email address doesn't look right")
+        if user.email is not None:
+            raise bad_request("email_locked", "Your sign-in email can't be changed here. Contact CardiosensAI support")
+        if db.scalar(select(User.id).where(func.lower(User.email) == value)) is not None:
+            raise conflict("email_taken", "This email address can't be used")
+        ch, code = otp.create(db, channel="email", purpose="add_email", email=value, user_id=user.id)
+        masked = mask_email(value)
+    else:
+        value = body.value.replace(" ", "").replace("-", "")
+        if not re.fullmatch(E164, value):
+            raise bad_request("invalid_phone", "Enter the mobile number with its country code")
+        if user.phone is not None:
+            raise bad_request("phone_locked", "Your mobile number can't be changed here. Contact CardiosensAI support")
+        if not sms.available():
+            raise sms.UNAVAILABLE
+        if db.scalar(select(User.id).where(User.phone == value)) is not None:
+            raise conflict("phone_taken", "This mobile number can't be used")
+        ch, code = otp.create(db, channel="sms", purpose="add_phone", phone=value, user_id=user.id)
+        masked = sms.mask_phone(value)
+    db.commit()
+    otp.deliver(ch, code, user.full_name)
+    return ContactCodeOut(challenge_id=str(ch.id), destination_masked=masked, expires_in_s=s.otp_ttl_s, dev_code=otp.dev_code(code))
+
+
+@router.post("/contact/verify", response_model=UserOut, summary="Confirm the new mobile number or email with its code")
+def contact_verify(
+    body: ContactVerifyIn, user: User = Depends(get_current_user), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+) -> UserOut:
+    ch = otp.get(db, body.challenge_id)
+    purpose = ch.purpose if ch is not None and ch.purpose in ("add_email", "add_phone") else "add_email"
+    otp.check(db, ch if ch is not None and ch.user_id == user.id else None, body.code, purpose=purpose)
+    now = utcnow()
+    if ch.channel == "email":
+        if user.email is not None or db.scalar(select(User.id).where(func.lower(User.email) == ch.email)) is not None:
+            raise conflict("email_taken", "This email address can't be used")
+        user.email, user.email_verified_at = ch.email, now
+    else:
+        if user.phone is not None or db.scalar(select(User.id).where(User.phone == ch.phone)) is not None:
+            raise conflict("phone_taken", "This mobile number can't be used")
+        user.phone, user.phone_verified_at = ch.phone, now
+    ch.consumed_at = now
+    audit.record(db, actor=user, action=f"account.{ch.purpose}", meta=meta)
     db.commit()
     return user_out(user)
 
@@ -121,6 +176,7 @@ def submit_professional(
         prof.verification_status = "pending"
         prof.verified_at = None
         prof.verified_by = None
+        prof.review_note = None
         prof.submitted_at = utcnow()
     audit.record(db, actor=user, action="professional.submit", meta=meta)
     db.commit()
@@ -155,6 +211,7 @@ def update_organization(
     org.verification_status = "pending"
     org.verified_at = None
     org.verified_by = None
+    org.review_note = None
     audit.record(db, actor=user, action="organization.submit", resource_type="organization", resource_id=org.id, meta=meta)
     db.commit()
     return organization_out(org)
@@ -200,53 +257,8 @@ def delete_me(user: User = Depends(get_current_user), db: Session = Depends(get_
     Audit events are kept (without health values) where records of access must be retained.
     Copies that recipients already downloaded can't be recalled.
     """
-    now = utcnow()
-    storage = get_storage()
-    keys = [k for k in db.scalars(select(EcgRecording.storage_key).where(EcgRecording.patient_id == user.id))]
-    keys += [k for k in db.scalars(select(Report.storage_key).where(Report.patient_id == user.id)) if k]
-    doc_ids = select(Document.id).where(Document.patient_id == user.id)
-    keys += [k for k in db.scalars(select(DocumentFile.storage_key).where(DocumentFile.document_id.in_(doc_ids))) if k]
-    grant_ids = select(AccessGrant.id).where(AccessGrant.patient_id == user.id)
-    db.execute(delete(Invite).where(Invite.grant_id.in_(grant_ids)))
-    db.execute(
-        update(AccessGrant)
-        .where(AccessGrant.patient_id == user.id, AccessGrant.status != "revoked")
-        .values(status="revoked", revoked_at=now)
-    )
-    db.execute(
-        update(AccessGrant)
-        .where(AccessGrant.grantee_user_id == user.id, AccessGrant.status != "revoked")
-        .values(status="revoked", revoked_at=now)
-    )
-    db.execute(delete(Measurement).where(Measurement.patient_id == user.id))
-    db.execute(
-        delete(EcgLiveChunk).where(EcgLiveChunk.session_id.in_(select(EcgLiveSession.id).where(EcgLiveSession.patient_id == user.id)))
-    )
-    db.execute(delete(EcgLiveSession).where(EcgLiveSession.patient_id == user.id))
-    db.execute(delete(EcgRecording).where(EcgRecording.patient_id == user.id))
-    db.execute(delete(DocumentComment).where(DocumentComment.document_id.in_(doc_ids)))
-    db.execute(delete(DocumentFile).where(DocumentFile.document_id.in_(doc_ids)))
-    db.execute(delete(Document).where(Document.patient_id == user.id))
-    db.execute(update(Report).where(Report.patient_id == user.id).values(status="deleted", storage_key=None))
-    db.execute(update(Device).where(Device.patient_id == user.id, Device.status == "active").values(status="retired", retired_at=now))
-    db.execute(delete(Notification).where(Notification.user_id == user.id))
-    db.execute(update(RefreshToken).where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None)).values(revoked_at=now))
-    # Consent records (no health data) are kept as evidence of what was agreed and when.
-    db.execute(
-        update(CareLink)
-        .where(or_(CareLink.patient_id == user.id, CareLink.doctor_id == user.id), CareLink.status.in_(("pending", "active")))
-        .values(status="ended", ended_at=now, ended_by=user.id)
-    )
-    if user.phone:
-        user.phone = f"deleted:{user.id.hex[:12]}"
-    user.email = user.full_name = user.emergency_contact = user.password_hash = None
-    user.date_of_birth = None
-    user.mfa_secret = None
-    user.mfa_enabled = False
-    user.preferences = {}
-    user.status = "deleted"
-    user.deleted_at = now
-    audit.record(db, actor=user, action="account.delete", patient_id=user.id, meta=meta)
+    keys = erase_account(db, user, actor=user, action="account.delete", meta=meta)
     db.commit()
+    storage = get_storage()
     for k in keys:
         storage.delete(k)

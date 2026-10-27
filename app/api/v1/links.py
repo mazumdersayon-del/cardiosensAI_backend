@@ -132,7 +132,7 @@ def _require_can_link(db: Session, user: User) -> None:
     if st.can_link:
         return
     reasons = {
-        "verify_email": "confirm your email address",
+        "verify_contact": "confirm your mobile number or email address",
         "verification": "wait for CardiosensAI to verify your registration",
         "enable_mfa": "turn on two-step sign-in",
     }

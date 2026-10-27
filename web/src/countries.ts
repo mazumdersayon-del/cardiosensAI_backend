@@ -251,10 +251,11 @@ export function fromE164(value: string | null | undefined, preferIso = DEFAULT_C
   const digits = (value ?? '').replace(/\D/g, '');
   if (!value || !value.trim().startsWith('+') || !digits) return { iso: preferIso, national: '' };
   const matches = COUNTRIES.filter((c) => digits.startsWith(c.dial)).sort((a, b) => b.dial.length - a.dial.length);
-  if (!matches.length) return { iso: preferIso, national: digits };
-  const dial = matches[0].dial;
+  const longest = matches[0];
+  if (!longest) return { iso: preferIso, national: digits };
+  const dial = longest.dial;
   const same = matches.filter((c) => c.dial === dial);
-  const pick = same.find((c) => c.iso === preferIso) ?? same.find((c) => c.iso === SHARED_CODE_DEFAULT[dial]) ?? same[0];
+  const pick = same.find((c) => c.iso === preferIso) ?? same.find((c) => c.iso === SHARED_CODE_DEFAULT[dial]) ?? longest;
   return { iso: pick.iso, national: digits.slice(dial.length) };
 }
 

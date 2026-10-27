@@ -11,7 +11,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Send a one-time sign-in code by SMS",
+        "summary": "Older app builds: SMS code sign-in",
         "operationId": "request_otp_v1_auth_otp_request_post",
         "requestBody": {
           "content": {
@@ -94,7 +94,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/auth/otp/verify": {
@@ -102,7 +103,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Verify the code; creates the account on first sign-in",
+        "summary": "Older app builds: verify the SMS code (creates a patient on first sign-in)",
         "operationId": "verify_otp_v1_auth_otp_verify_post",
         "requestBody": {
           "content": {
@@ -193,7 +194,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/auth/mfa/verify": {
@@ -799,13 +801,84 @@
         ]
       }
     },
+    "/v1/auth/options": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "What the sign-in pages can offer (Google, SMS)",
+        "operationId": "auth_options_v1_auth_options_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthOptionsOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/register": {
       "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Create a patient, doctor or clinic account",
-        "description": "Always answers the same way, so the form can't be used to find out who has an account.\n\nA new account must confirm its email address before it can sign in. If the address is already\nregistered, its owner gets an email saying so instead.",
+        "summary": "Start sign-up: sends a code to the mobile number (and email)",
+        "description": "Nothing is created until the codes are entered (POST /auth/register/verify).\n\nThe answer looks the same whether or not the number or address already has an account: an existing owner\ngets a notice (\"someone tried to register\u2026\") instead of a code, so the sign-up can't complete.",
         "operationId": "register_v1_auth_register_post",
         "requestBody": {
           "content": {
@@ -823,7 +896,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessageOut"
+                  "$ref": "#/components/schemas/SignupOut"
                 }
               }
             }
@@ -891,18 +964,18 @@
         }
       }
     },
-    "/v1/auth/email/verify": {
+    "/v1/auth/register/resend": {
       "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Confirm an email address with the emailed link",
-        "operationId": "verify_email_v1_auth_email_verify_post",
+        "summary": "Send new sign-up codes",
+        "operationId": "register_resend_v1_auth_register_resend_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TokenIn"
+                "$ref": "#/components/schemas/SignupIdIn"
               }
             }
           },
@@ -914,7 +987,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessageOut"
+                  "$ref": "#/components/schemas/SignupOut"
                 }
               }
             }
@@ -982,26 +1055,224 @@
         }
       }
     },
-    "/v1/auth/email/resend": {
+    "/v1/auth/register/verify": {
       "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Send the confirmation email again",
-        "operationId": "resend_verification_v1_auth_email_resend_post",
+        "summary": "Finish sign-up with the codes: the account is created, activated and signed in",
+        "operationId": "register_verify_v1_auth_register_verify_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/EmailIn"
+                "$ref": "#/components/schemas/SignupVerifyIn"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/login/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign-in step 1: email \u2192 code by email, mobile number \u2192 code by SMS",
+        "description": "Same answer whether or not the address has an account (then no code is sent).",
+        "operationId": "login_start_v1_auth_login_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginStartIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginStartOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/login/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign-in step 2: the one-time code",
+        "operationId": "login_verify_v1_auth_login_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginCodeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TokenOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MfaRequiredOut"
+                    }
+                  ],
+                  "title": "Response Login Verify V1 Auth Login Verify Post"
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad Request",
@@ -1071,7 +1342,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Sign in with email and password (all roles)",
+        "summary": "Sign in with email or mobile number and password (all roles)",
         "operationId": "login_v1_auth_login_post",
         "requestBody": {
           "content": {
@@ -1098,6 +1369,105 @@
                     }
                   ],
                   "title": "Response Login V1 Auth Login Post"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/google": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign in with Google (an ID token from Google Identity Services)",
+        "operationId": "google_sign_in_v1_auth_google_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TokenOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MfaRequiredOut"
+                    }
+                  ],
+                  "title": "Response Google Sign In V1 Auth Google Post"
                 }
               }
             }
@@ -1659,6 +2029,199 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/UserUpdateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/me/contact/code": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Add a mobile number or email to this account: sends a code to it",
+        "description": "Only while the account has none: the sign-in email and mobile number aren't changed here (CardiosensAI support does that).",
+        "operationId": "contact_code_v1_me_contact_code_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactCodeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactCodeOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/me/contact/verify": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Confirm the new mobile number or email with its code",
+        "operationId": "contact_verify_v1_me_contact_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactVerifyIn"
               }
             }
           },
@@ -7000,12 +7563,545 @@
         }
       }
     },
+    "/v1/me/verification": {
+      "get": {
+        "tags": [
+          "verification"
+        ],
+        "summary": "Doctors/clinics: verification status, reason and licence files",
+        "operationId": "my_verification_v1_me_verification_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/me/verification/files": {
+      "post": {
+        "tags": [
+          "verification"
+        ],
+        "summary": "Upload licence / registration certificates (PDF or JPEG)",
+        "operationId": "upload_licence_v1_me_verification_files_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_licence_v1_me_verification_files_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/me/verification/files/{file_id}": {
+      "delete": {
+        "tags": [
+          "verification"
+        ],
+        "summary": "Remove a licence file (not while verified)",
+        "operationId": "delete_licence_v1_me_verification_files__file_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me/verification/files/{file_id}/link": {
+      "post": {
+        "tags": [
+          "verification"
+        ],
+        "summary": "Short-lived link to view your licence file",
+        "operationId": "my_licence_link_v1_me_verification_files__file_id__link_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileLinkOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me/verification/resubmit": {
+      "post": {
+        "tags": [
+          "verification"
+        ],
+        "summary": "After a rejection or revocation: ask CardiosensAI to review again",
+        "operationId": "resubmit_v1_me_verification_resubmit_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/verification-files/{token}": {
+      "get": {
+        "tags": [
+          "verification"
+        ],
+        "summary": "Open a licence file through its signed link (owner or CardiosensAI staff)",
+        "operationId": "open_licence_v1_verification_files__token__get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/pdf": {},
+              "image/jpeg": {}
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/users": {
       "get": {
         "tags": [
           "admin"
         ],
-        "summary": "List Users",
+        "summary": "Find accounts (no health data). Deleted accounts only with status=deleted|all",
         "operationId": "list_users_v1_admin_users_get",
         "security": [
           {
@@ -7020,6 +8116,12 @@
             "schema": {
               "anyOf": [
                 {
+                  "enum": [
+                    "patient",
+                    "doctor",
+                    "clinic",
+                    "admin"
+                  ],
                   "type": "string"
                 },
                 {
@@ -7036,6 +8138,13 @@
             "schema": {
               "anyOf": [
                 {
+                  "enum": [
+                    "active",
+                    "suspended",
+                    "deleting",
+                    "deleted",
+                    "all"
+                  ],
                   "type": "string"
                 },
                 {
@@ -7046,6 +8155,28 @@
             }
           },
           {
+            "name": "verification",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending",
+                    "verified",
+                    "rejected",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Verification"
+            }
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,
@@ -7053,16 +8184,27 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "maxLength": 40
+                  "maxLength": 80
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Matches name, 16-digit ID or last digits of phone",
+              "description": "Name or email (contains), or digits: start of the 16-digit ID / end of the phone",
               "title": "Q"
             },
-            "description": "Matches name, 16-digit ID or last digits of phone"
+            "description": "Name or email (contains), or digits: start of the 16-digit ID / end of the phone"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
           },
           {
             "name": "limit",
@@ -7083,14 +8225,187 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AdminUserOut"
-                  },
-                  "title": "Response List Users V1 Admin Users Get"
+                  "$ref": "#/components/schemas/AdminUserPage"
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/users.csv": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "The filtered account list as CSV (no health data)",
+        "operationId": "export_users_v1_admin_users_csv_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "patient",
+                    "doctor",
+                    "clinic",
+                    "admin"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "suspended",
+                    "deleting",
+                    "deleted",
+                    "all"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "verification",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending",
+                    "verified",
+                    "rejected",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Verification"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "fullEmails",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include full email addresses (audited)",
+              "default": false,
+              "title": "Fullemails"
+            },
+            "description": "Include full email addresses (audited)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
           },
           "400": {
             "content": {
@@ -7160,7 +8475,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Set User Status",
+        "summary": "Suspend (blocks sign-in, keeps data) or reactivate an account",
         "operationId": "set_user_status_v1_admin_users__user_id__status_patch",
         "security": [
           {
@@ -7185,6 +8500,323 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/UserStatusIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/users/{user_id}/delete": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Delete an account: blocked now, erased after 30 days",
+        "operationId": "delete_user_v1_admin_users__user_id__delete_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReasonIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/users/{user_id}/restore": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Cancel a scheduled deletion",
+        "operationId": "restore_user_v1_admin_users__user_id__restore_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/users/{user_id}/erase": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Erase a scheduled account now (irreversible)",
+        "operationId": "erase_user_v1_admin_users__user_id__erase_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EraseIn"
               }
             }
           }
@@ -7381,12 +9013,14 @@
                   "enum": [
                     "pending",
                     "verified",
-                    "rejected"
+                    "rejected",
+                    "revoked"
                   ],
                   "type": "string"
                 },
                 {
-                  "type": "null"
+                  "const": "all",
+                  "type": "string"
                 }
               ],
               "default": "pending",
@@ -7495,12 +9129,14 @@
                   "enum": [
                     "pending",
                     "verified",
-                    "rejected"
+                    "rejected",
+                    "revoked"
                   ],
                   "type": "string"
                 },
                 {
-                  "type": "null"
+                  "const": "all",
+                  "type": "string"
                 }
               ],
               "default": "pending",
@@ -7591,7 +9227,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Approve or reject a clinic",
+        "summary": "Verify, reject (with reason) or revoke a clinic",
         "operationId": "verify_organization_v1_admin_organizations__org_id__verify_post",
         "security": [
           {
@@ -7692,7 +9328,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Approve or reject a doctor's registration",
+        "summary": "Verify, reject (with reason) or revoke a doctor",
         "operationId": "verify_professional_v1_admin_professionals__user_id__verify_post",
         "security": [
           {
@@ -7723,6 +9359,297 @@
         },
         "responses": {
           "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/verification-files/{file_id}/link": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Short-lived link to view a licence document",
+        "operationId": "licence_link_v1_admin_verification_files__file_id__link_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileLinkOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/stats": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Platform statistics: counts only, never health values",
+        "operationId": "get_stats_v1_admin_stats_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 365,
+              "minimum": 1,
+              "default": 30,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/stats.csv": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "The statistics as CSV",
+        "operationId": "export_stats_v1_admin_stats_csv_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 365,
+              "minimum": 1,
+              "default": 30,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "description": "Successful Response"
           },
           "400": {
@@ -8348,7 +10275,19 @@
               }
             ],
             "title": "Verificationstatus",
-            "description": "Doctors and clinics: pending | verified | rejected | missing"
+            "description": "Doctors and clinics: pending | verified | rejected | revoked | missing"
+          },
+          "verificationNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verificationnote",
+            "description": "Reason CardiosensAI gave with a rejection or revocation"
           },
           "canLink": {
             "type": "boolean",
@@ -8363,7 +10302,8 @@
               "type": "string"
             },
             "type": "array",
-            "title": "Missing"
+            "title": "Missing",
+            "description": "Any of: verify_contact, upload_licence, verification, enable_mfa"
           }
         },
         "type": "object",
@@ -8380,6 +10320,61 @@
         ],
         "title": "AccountStatusOut",
         "description": "What a signed-in account still needs before it can link to others or see patient data."
+      },
+      "ActivityStats": {
+        "properties": {
+          "activeDay": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Activeday"
+          },
+          "activeWeek": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Activeweek"
+          },
+          "activeMonth": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Activemonth"
+          },
+          "activeInPeriod": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Activeinperiod"
+          },
+          "patientsWithReadings": {
+            "type": "integer",
+            "title": "Patientswithreadings"
+          },
+          "patientsWithEcg": {
+            "type": "integer",
+            "title": "Patientswithecg"
+          },
+          "patientsWithDevices": {
+            "type": "integer",
+            "title": "Patientswithdevices"
+          }
+        },
+        "type": "object",
+        "required": [
+          "activeDay",
+          "activeWeek",
+          "activeMonth",
+          "activeInPeriod",
+          "patientsWithReadings",
+          "patientsWithEcg",
+          "patientsWithDevices"
+        ],
+        "title": "ActivityStats"
       },
       "AdminUserOut": {
         "properties": {
@@ -8436,6 +10431,10 @@
             "type": "boolean",
             "title": "Haspassword"
           },
+          "mfaEnabled": {
+            "type": "boolean",
+            "title": "Mfaenabled"
+          },
           "fullName": {
             "anyOf": [
               {
@@ -8447,15 +10446,7 @@
             ],
             "title": "Fullname"
           },
-          "createdAt": {
-            "type": "string",
-            "title": "Createdat"
-          },
-          "deviceCount": {
-            "type": "integer",
-            "title": "Devicecount"
-          },
-          "professionalStatus": {
+          "organizationName": {
             "anyOf": [
               {
                 "type": "string"
@@ -8464,7 +10455,48 @@
                 "type": "null"
               }
             ],
-            "title": "Professionalstatus"
+            "title": "Organizationname"
+          },
+          "createdAt": {
+            "type": "string",
+            "title": "Createdat"
+          },
+          "lastActiveAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastactiveat"
+          },
+          "eraseAfter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eraseafter"
+          },
+          "deviceCount": {
+            "type": "integer",
+            "title": "Devicecount"
+          },
+          "verificationStatus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verificationstatus"
           }
         },
         "type": "object",
@@ -8477,11 +10509,45 @@
           "emailMasked",
           "emailVerified",
           "hasPassword",
+          "mfaEnabled",
           "fullName",
           "createdAt",
+          "lastActiveAt",
+          "eraseAfter",
           "deviceCount"
         ],
         "title": "AdminUserOut"
+      },
+      "AdminUserPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUserOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "AdminUserPage"
       },
       "AuditOut": {
         "properties": {
@@ -8589,6 +10655,31 @@
           "detail"
         ],
         "title": "AuditOut"
+      },
+      "AuthOptionsOut": {
+        "properties": {
+          "googleClientId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Googleclientid"
+          },
+          "smsAvailable": {
+            "type": "boolean",
+            "title": "Smsavailable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "googleClientId",
+          "smsAvailable"
+        ],
+        "title": "AuthOptionsOut"
       },
       "BatchIn": {
         "properties": {
@@ -8711,6 +10802,24 @@
           "title"
         ],
         "title": "Body_upload_document_v1_patients__patient_id__documents_post"
+      },
+      "Body_upload_licence_v1_me_verification_files_post": {
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string",
+              "contentMediaType": "application/octet-stream"
+            },
+            "type": "array",
+            "title": "Files",
+            "description": "PDF or JPEG files"
+          }
+        },
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "title": "Body_upload_licence_v1_me_verification_files_post"
       },
       "Calibration": {
         "properties": {
@@ -8945,6 +11054,108 @@
           "withdrawnAt"
         ],
         "title": "ConsentOut"
+      },
+      "ContactCodeIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "email",
+              "phone"
+            ],
+            "title": "Kind"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "ContactCodeIn"
+      },
+      "ContactCodeOut": {
+        "properties": {
+          "challengeId": {
+            "type": "string",
+            "title": "Challengeid"
+          },
+          "destinationMasked": {
+            "type": "string",
+            "title": "Destinationmasked"
+          },
+          "expiresInS": {
+            "type": "integer",
+            "title": "Expiresins"
+          },
+          "devCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Devcode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "challengeId",
+          "destinationMasked",
+          "expiresInS"
+        ],
+        "title": "ContactCodeOut"
+      },
+      "ContactVerifyIn": {
+        "properties": {
+          "challengeId": {
+            "type": "string",
+            "title": "Challengeid"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^\\d{6}$",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "challengeId",
+          "code"
+        ],
+        "title": "ContactVerifyIn"
+      },
+      "DeletionOut": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "eraseAfter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eraseafter"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "eraseAfter"
+        ],
+        "title": "DeletionOut"
       },
       "DeviceIn": {
         "properties": {
@@ -10097,6 +12308,20 @@
         ],
         "title": "EmailIn"
       },
+      "EraseIn": {
+        "properties": {
+          "confirmUniqueId": {
+            "type": "string",
+            "title": "Confirmuniqueid",
+            "description": "The account's 16-digit ID, typed again to confirm"
+          }
+        },
+        "type": "object",
+        "required": [
+          "confirmUniqueId"
+        ],
+        "title": "EraseIn"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -10144,6 +12369,27 @@
           "expiresInS"
         ],
         "title": "FileLinkOut"
+      },
+      "GoogleIn": {
+        "properties": {
+          "credential": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 20,
+            "title": "Credential",
+            "description": "Google ID token"
+          },
+          "webSession": {
+            "type": "boolean",
+            "title": "Websession",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "credential"
+        ],
+        "title": "GoogleIn"
       },
       "GrantCreatedOut": {
         "properties": {
@@ -10384,6 +12630,68 @@
           "revokedAt"
         ],
         "title": "GrantOut"
+      },
+      "GrowthPoint": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date",
+            "title": "Start"
+          },
+          "patient": {
+            "type": "integer",
+            "title": "Patient"
+          },
+          "doctor": {
+            "type": "integer",
+            "title": "Doctor"
+          },
+          "clinic": {
+            "type": "integer",
+            "title": "Clinic"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "patient",
+          "doctor",
+          "clinic"
+        ],
+        "title": "GrowthPoint"
+      },
+      "GrowthStats": {
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "enum": [
+              "day",
+              "week"
+            ],
+            "title": "Bucket"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "newInPeriod": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Newinperiod"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bucket",
+          "points",
+          "newInPeriod"
+        ],
+        "title": "GrowthStats"
       },
       "HTTPValidationError": {
         "properties": {
@@ -10741,11 +13049,55 @@
         ],
         "title": "LinkedPatientOut"
       },
+      "LoginCodeIn": {
+        "properties": {
+          "challengeId": {
+            "type": "string",
+            "title": "Challengeid"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^\\d{6}$",
+            "title": "Code"
+          },
+          "webSession": {
+            "type": "boolean",
+            "title": "Websession",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "challengeId",
+          "code"
+        ],
+        "title": "LoginCodeIn"
+      },
       "LoginIn": {
         "properties": {
+          "identifier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identifier"
+          },
           "email": {
-            "type": "string",
-            "format": "email",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Email"
           },
           "password": {
@@ -10762,10 +13114,70 @@
         },
         "type": "object",
         "required": [
-          "email",
           "password"
         ],
-        "title": "LoginIn"
+        "title": "LoginIn",
+        "description": "Password sign-in. `identifier` (email or mobile number) replaces `email`, which older app builds send."
+      },
+      "LoginStartIn": {
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Identifier",
+            "description": "Email address, or mobile number in E.164 (+91...)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "identifier"
+        ],
+        "title": "LoginStartIn"
+      },
+      "LoginStartOut": {
+        "properties": {
+          "challengeId": {
+            "type": "string",
+            "title": "Challengeid"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "sms",
+              "email"
+            ],
+            "title": "Channel"
+          },
+          "destinationMasked": {
+            "type": "string",
+            "title": "Destinationmasked"
+          },
+          "expiresInS": {
+            "type": "integer",
+            "title": "Expiresins"
+          },
+          "devCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Devcode",
+            "description": "Only with DEV_EXPOSE_OTP (development)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "challengeId",
+          "channel",
+          "destinationMasked",
+          "expiresInS"
+        ],
+        "title": "LoginStartOut"
       },
       "MeasurementOut": {
         "properties": {
@@ -11256,6 +13668,17 @@
               }
             ],
             "title": "Verifiedat"
+          },
+          "reviewNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewnote"
           }
         },
         "type": "object",
@@ -11330,6 +13753,17 @@
             ],
             "title": "Phonemasked"
           },
+          "ownerUserId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owneruserid"
+          },
           "ownerName": {
             "anyOf": [
               {
@@ -11341,13 +13775,64 @@
             ],
             "title": "Ownername"
           },
+          "ownerEmailMasked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owneremailmasked"
+          },
+          "accountStatus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accountstatus"
+          },
           "verificationStatus": {
             "type": "string",
             "title": "Verificationstatus"
           },
+          "reviewNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewnote"
+          },
           "createdAt": {
             "type": "string",
             "title": "Createdat"
+          },
+          "decidedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decidedat"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/VerificationFileOut"
+            },
+            "type": "array",
+            "title": "Files"
           }
         },
         "type": "object",
@@ -11359,9 +13844,15 @@
           "city",
           "registrationNumber",
           "phoneMasked",
+          "ownerUserId",
           "ownerName",
+          "ownerEmailMasked",
+          "accountStatus",
           "verificationStatus",
-          "createdAt"
+          "reviewNote",
+          "createdAt",
+          "decidedAt",
+          "files"
         ],
         "title": "OrganizationQueueOut"
       },
@@ -11517,9 +14008,17 @@
       "PasswordChangeIn": {
         "properties": {
           "currentPassword": {
-            "type": "string",
-            "maxLength": 128,
-            "title": "Currentpassword"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentpassword",
+            "description": "Not needed if the account has no password yet"
           },
           "newPassword": {
             "type": "string",
@@ -11529,7 +14028,6 @@
         },
         "type": "object",
         "required": [
-          "currentPassword",
           "newPassword"
         ],
         "title": "PasswordChangeIn"
@@ -11630,6 +14128,17 @@
               }
             ],
             "title": "Verifiedat"
+          },
+          "reviewNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewnote"
           }
         },
         "type": "object",
@@ -11671,6 +14180,21 @@
             ],
             "title": "Fullname"
           },
+          "emailMasked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Emailmasked"
+          },
+          "accountStatus": {
+            "type": "string",
+            "title": "Accountstatus"
+          },
           "registrationNumber": {
             "type": "string",
             "title": "Registrationnumber"
@@ -11694,9 +14218,38 @@
             "type": "string",
             "title": "Verificationstatus"
           },
+          "reviewNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewnote"
+          },
           "submittedAt": {
             "type": "string",
             "title": "Submittedat"
+          },
+          "decidedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decidedat"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/VerificationFileOut"
+            },
+            "type": "array",
+            "title": "Files"
           }
         },
         "type": "object",
@@ -11704,11 +14257,16 @@
           "userId",
           "uniqueId",
           "fullName",
+          "emailMasked",
+          "accountStatus",
           "registrationNumber",
           "council",
           "specialty",
           "verificationStatus",
-          "submittedAt"
+          "reviewNote",
+          "submittedAt",
+          "decidedAt",
+          "files"
         ],
         "title": "ProfessionalQueueOut"
       },
@@ -11762,6 +14320,21 @@
         ],
         "title": "ProvenanceOut"
       },
+      "ReasonIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "ReasonIn"
+      },
       "RegisterIn": {
         "properties": {
           "role": {
@@ -11773,15 +14346,37 @@
             ],
             "title": "Role"
           },
-          "email": {
+          "phone": {
             "type": "string",
-            "format": "email",
-            "title": "Email"
+            "pattern": "^\\+[1-9]\\d{7,14}$",
+            "title": "Phone",
+            "description": "Mobile number, E.164. Gets a one-time code"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email",
+            "description": "Optional. Gets its own one-time code"
           },
           "password": {
-            "type": "string",
-            "maxLength": 128,
-            "title": "Password"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password",
+            "description": "Required unless signing up with Google"
           },
           "fullName": {
             "type": "string",
@@ -11789,18 +14384,6 @@
             "minLength": 2,
             "title": "Fullname",
             "description": "For a clinic: the name of the person managing the account"
-          },
-          "phone": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^\\+[1-9]\\d{7,14}$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Phone"
           },
           "dateOfBirth": {
             "anyOf": [
@@ -11834,16 +14417,29 @@
                 "type": "null"
               }
             ]
+          },
+          "googleCredential": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Googlecredential",
+            "description": "Google ID token: the email comes from Google, verified"
           }
         },
         "type": "object",
         "required": [
           "role",
-          "email",
-          "password",
+          "phone",
           "fullName"
         ],
-        "title": "RegisterIn"
+        "title": "RegisterIn",
+        "description": "Sign-up: a mobile number is required (it gets a code), an email is optional (it gets a code too)."
       },
       "ReportCreateIn": {
         "properties": {
@@ -11994,6 +14590,24 @@
         ],
         "title": "ReportOut"
       },
+      "RestoreIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "RestoreIn"
+      },
       "Segment": {
         "properties": {
           "fromSec": {
@@ -12096,20 +14710,153 @@
         ],
         "title": "SharedPatientOut"
       },
-      "TokenIn": {
+      "SignupIdIn": {
         "properties": {
-          "token": {
+          "signupId": {
             "type": "string",
-            "maxLength": 200,
-            "minLength": 20,
-            "title": "Token"
+            "title": "Signupid"
           }
         },
         "type": "object",
         "required": [
-          "token"
+          "signupId"
         ],
-        "title": "TokenIn"
+        "title": "SignupIdIn"
+      },
+      "SignupOut": {
+        "properties": {
+          "signupId": {
+            "type": "string",
+            "title": "Signupid"
+          },
+          "phoneMasked": {
+            "type": "string",
+            "title": "Phonemasked"
+          },
+          "emailMasked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Emailmasked",
+            "description": "Set when a code was also sent to the email address"
+          },
+          "expiresInS": {
+            "type": "integer",
+            "title": "Expiresins"
+          },
+          "devPhoneCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Devphonecode",
+            "description": "Only with DEV_EXPOSE_OTP (development)"
+          },
+          "devEmailCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Devemailcode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "signupId",
+          "phoneMasked",
+          "emailMasked",
+          "expiresInS"
+        ],
+        "title": "SignupOut"
+      },
+      "SignupVerifyIn": {
+        "properties": {
+          "signupId": {
+            "type": "string",
+            "title": "Signupid"
+          },
+          "phoneCode": {
+            "type": "string",
+            "pattern": "^\\d{6}$",
+            "title": "Phonecode"
+          },
+          "emailCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Emailcode",
+            "description": "Required when the sign-up has an email address"
+          },
+          "webSession": {
+            "type": "boolean",
+            "title": "Websession",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "signupId",
+          "phoneCode"
+        ],
+        "title": "SignupVerifyIn"
+      },
+      "StatsOut": {
+        "properties": {
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generatedat"
+          },
+          "days": {
+            "type": "integer",
+            "title": "Days"
+          },
+          "users": {
+            "$ref": "#/components/schemas/UserStats"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationStats"
+          },
+          "growth": {
+            "$ref": "#/components/schemas/GrowthStats"
+          },
+          "activity": {
+            "$ref": "#/components/schemas/ActivityStats"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/VolumeStats"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generatedAt",
+          "days",
+          "users",
+          "verification",
+          "growth",
+          "activity",
+          "volume"
+        ],
+        "title": "StatsOut"
       },
       "TokenOut": {
         "properties": {
@@ -12205,6 +14952,21 @@
             "type": "boolean",
             "title": "Emailverified"
           },
+          "phoneVerified": {
+            "type": "boolean",
+            "title": "Phoneverified",
+            "default": false
+          },
+          "googleLinked": {
+            "type": "boolean",
+            "title": "Googlelinked",
+            "default": false
+          },
+          "hasPassword": {
+            "type": "boolean",
+            "title": "Haspassword",
+            "default": true
+          },
           "organizationId": {
             "anyOf": [
               {
@@ -12294,6 +15056,46 @@
         ],
         "title": "UserOut"
       },
+      "UserStats": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "byRole": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Byrole"
+          },
+          "emailVerified": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Emailverified"
+          },
+          "mfaEnabled": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Mfaenabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "byRole",
+          "emailVerified",
+          "mfaEnabled"
+        ],
+        "title": "UserStats"
+      },
       "UserStatusIn": {
         "properties": {
           "status": {
@@ -12331,19 +15133,6 @@
               }
             ],
             "title": "Fullname"
-          },
-          "email": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "email"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Email",
-            "description": "Only accepted while the account has no sign-in email yet (app accounts)"
           },
           "dateOfBirth": {
             "anyOf": [
@@ -12425,13 +15214,114 @@
         ],
         "title": "ValidationError"
       },
+      "VerificationFileOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "contentType": {
+            "type": "string",
+            "title": "Contenttype"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "title": "Sizebytes"
+          },
+          "uploadedAt": {
+            "type": "string",
+            "title": "Uploadedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "filename",
+          "contentType",
+          "sizeBytes",
+          "uploadedAt"
+        ],
+        "title": "VerificationFileOut"
+      },
+      "VerificationOut": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "reviewNote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewnote"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/VerificationFileOut"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "maxFiles": {
+            "type": "integer",
+            "title": "Maxfiles"
+          },
+          "canResubmit": {
+            "type": "boolean",
+            "title": "Canresubmit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "reviewNote",
+          "files",
+          "maxFiles",
+          "canResubmit"
+        ],
+        "title": "VerificationOut"
+      },
+      "VerificationStats": {
+        "properties": {
+          "doctors": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Doctors"
+          },
+          "clinics": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Clinics"
+          }
+        },
+        "type": "object",
+        "required": [
+          "doctors",
+          "clinics"
+        ],
+        "title": "VerificationStats"
+      },
       "VerifyIn": {
         "properties": {
           "decision": {
             "type": "string",
             "enum": [
               "verified",
-              "rejected"
+              "rejected",
+              "revoked"
             ],
             "title": "Decision"
           },
@@ -12439,7 +15329,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 200
+                "maxLength": 300
               },
               {
                 "type": "null"
@@ -12453,6 +15343,64 @@
           "decision"
         ],
         "title": "VerifyIn"
+      },
+      "Volume": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "period": {
+            "type": "integer",
+            "title": "Period"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "period"
+        ],
+        "title": "Volume"
+      },
+      "VolumeStats": {
+        "properties": {
+          "measurements": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "ecgRecordings": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "liveEcgSessions": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "documents": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "reports": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "devices": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "careLinks": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "familyShares": {
+            "$ref": "#/components/schemas/Volume"
+          }
+        },
+        "type": "object",
+        "required": [
+          "measurements",
+          "ecgRecordings",
+          "liveEcgSessions",
+          "documents",
+          "reports",
+          "devices",
+          "careLinks",
+          "familyShares"
+        ],
+        "title": "VolumeStats"
       }
     },
     "securitySchemes": {

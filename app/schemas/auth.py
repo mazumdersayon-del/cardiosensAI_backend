@@ -1,11 +1,14 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import EmailStr, Field
+from pydantic import EmailStr, Field, model_validator
 
 from app.schemas.common import CamelModel
 
 E164 = r"^\+[1-9]\d{7,14}$"
+
+
+CODE = r"^\d{6}$"
 
 
 class OtpRequestIn(CamelModel):
@@ -35,6 +38,9 @@ class UserOut(CamelModel):
     phone: str | None
     email: str | None
     email_verified: bool
+    phone_verified: bool = False
+    google_linked: bool = False
+    has_password: bool = True
     organization_id: str | None = None
     full_name: str | None
     date_of_birth: date | None
@@ -90,28 +96,103 @@ class ClinicSignupIn(CamelModel):
 
 
 class RegisterIn(CamelModel):
+    """Sign-up: a mobile number is required (it gets a code), an email is optional (it gets a code too)."""
+
     role: Literal["patient", "doctor", "clinic"]
-    email: EmailStr
-    password: str = Field(max_length=128)
+    phone: str = Field(pattern=E164, description="Mobile number, E.164. Gets a one-time code")
+    email: EmailStr | None = Field(default=None, description="Optional. Gets its own one-time code")
+    password: str | None = Field(default=None, max_length=128, description="Required unless signing up with Google")
     full_name: str = Field(min_length=2, max_length=120, description="For a clinic: the name of the person managing the account")
-    phone: str | None = Field(default=None, pattern=E164)
     date_of_birth: date | None = Field(default=None, description="Patients")
     doctor: DoctorSignupIn | None = None
     clinic: ClinicSignupIn | None = None
+    google_credential: str | None = Field(
+        default=None, max_length=4096, description="Google ID token: the email comes from Google, verified"
+    )
+
+
+class SignupOut(CamelModel):
+    signup_id: str
+    phone_masked: str
+    email_masked: str | None = Field(description="Set when a code was also sent to the email address")
+    expires_in_s: int
+    dev_phone_code: str | None = Field(default=None, description="Only with DEV_EXPOSE_OTP (development)")
+    dev_email_code: str | None = None
+
+
+class SignupVerifyIn(CamelModel):
+    signup_id: str
+    phone_code: str = Field(pattern=CODE)
+    email_code: str | None = Field(default=None, pattern=CODE, description="Required when the sign-up has an email address")
+    web_session: bool = False
+
+
+class SignupIdIn(CamelModel):
+    signup_id: str
+
+
+class LoginStartIn(CamelModel):
+    identifier: str = Field(min_length=3, max_length=254, description="Email address, or mobile number in E.164 (+91...)")
+
+
+class LoginStartOut(CamelModel):
+    challenge_id: str
+    channel: Literal["sms", "email"]
+    destination_masked: str
+    expires_in_s: int
+    dev_code: str | None = Field(default=None, description="Only with DEV_EXPOSE_OTP (development)")
+
+
+class LoginCodeIn(CamelModel):
+    challenge_id: str
+    code: str = Field(pattern=CODE)
+    web_session: bool = False
 
 
 class LoginIn(CamelModel):
-    email: EmailStr
+    """Password sign-in. `identifier` (email or mobile number) replaces `email`, which older app builds send."""
+
+    identifier: str | None = Field(default=None, min_length=3, max_length=254)
+    email: EmailStr | None = None
     password: str = Field(max_length=128)
     web_session: bool = Field(default=False, description="true: refresh token goes in an httpOnly cookie, not the response body")
+
+    @model_validator(mode="after")
+    def _who(self) -> "LoginIn":
+        if not (self.identifier or self.email):
+            raise ValueError("Give your email address or mobile number")
+        return self
+
+
+class GoogleIn(CamelModel):
+    credential: str = Field(min_length=20, max_length=4096, description="Google ID token")
+    web_session: bool = False
+
+
+class AuthOptionsOut(CamelModel):
+    google_client_id: str | None
+    sms_available: bool
+
+
+class ContactCodeIn(CamelModel):
+    kind: Literal["email", "phone"]
+    value: str = Field(min_length=3, max_length=254)
+
+
+class ContactCodeOut(CamelModel):
+    challenge_id: str
+    destination_masked: str
+    expires_in_s: int
+    dev_code: str | None = None
+
+
+class ContactVerifyIn(CamelModel):
+    challenge_id: str
+    code: str = Field(pattern=CODE)
 
 
 class MessageOut(CamelModel):
     message: str
-
-
-class TokenIn(CamelModel):
-    token: str = Field(min_length=20, max_length=200)
 
 
 class EmailIn(CamelModel):
@@ -124,7 +205,7 @@ class PasswordResetIn(CamelModel):
 
 
 class PasswordChangeIn(CamelModel):
-    current_password: str = Field(max_length=128)
+    current_password: str | None = Field(default=None, max_length=128, description="Not needed if the account has no password yet")
     new_password: str = Field(max_length=128)
 
 
@@ -139,7 +220,6 @@ class MfaCodeIn(CamelModel):
 
 class UserUpdateIn(CamelModel):
     full_name: str | None = Field(default=None, max_length=120)
-    email: EmailStr | None = Field(default=None, description="Only accepted while the account has no sign-in email yet (app accounts)")
     date_of_birth: date | None = None
     emergency_contact: str | None = Field(default=None, max_length=120)
     preferences: dict | None = None
@@ -171,6 +251,7 @@ class ProfessionalOut(CamelModel):
     verification_status: str
     submitted_at: datetime
     verified_at: datetime | None
+    review_note: str | None = None
 
 
 class OrganizationIn(CamelModel):
@@ -191,6 +272,7 @@ class OrganizationOut(CamelModel):
     phone: str | None
     verification_status: str
     verified_at: datetime | None
+    review_note: str | None = None
 
 
 class AccountStatusOut(CamelModel):
@@ -201,7 +283,8 @@ class AccountStatusOut(CamelModel):
     email_verified: bool
     mfa_enabled: bool
     mfa_required: bool
-    verification_status: str | None = Field(description="Doctors and clinics: pending | verified | rejected | missing")
+    verification_status: str | None = Field(description="Doctors and clinics: pending | verified | rejected | revoked | missing")
+    verification_note: str | None = Field(default=None, description="Reason CardiosensAI gave with a rejection or revocation")
     can_link: bool
     can_view_patients: bool
-    missing: list[str]
+    missing: list[str] = Field(description="Any of: verify_contact, upload_licence, verification, enable_mfa")
