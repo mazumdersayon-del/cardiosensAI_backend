@@ -32,7 +32,8 @@
 #                                        pre-migrate-*.dump before every run that applies a migration
 #   Daily account purge (systemd timer)  cardiosensai-purge: erases admin-deleted accounts after 30 days
 #   Device broker (Mosquitto)            mqtts://DOMAIN:8883 for CardiosensAI devices (TLS, Let's Encrypt cert),
-#                                        127.0.0.1:1883 for the bridge; logins in /var/lib/cardiosensai-mqtt/passwd
+#                                        127.0.0.1:1883 for the bridge; logins written by the app to /var/lib/cardiosensai-mqtt/passwd,
+#                                        copied for Mosquitto to /etc/mosquitto/cardiosens.passwd
 #   Device bridge (systemd service)      cardiosensai-mqtt: broker <-> database (app/scripts/mqtt_bridge.py)
 #   Firewall (ufw)                       SSH, HTTP, HTTPS, MQTT over TLS (8883) only
 #
@@ -200,7 +201,7 @@ install -d -m 0755 $PREFIX
 install -d -m 0750 -o $APP_USER -g $APP_USER $DATA_DIR $DATA_DIR/storage
 install -d -m 0750 -o root -g $APP_USER $CONF_DIR
 install -d -m 0700 $BACKUP_DIR
-# Broker logins: written by the app (cardiosens), read by Mosquitto (setgid: new files get group mosquitto).
+# Broker logins: written here by the app (cardiosens); root copies them to $MQTT_PASSWD for Mosquitto.
 install -d -m 2750 -o $APP_USER -g mosquitto $MQTT_DIR
 
 # ---------------------------------------------------------------- code
@@ -453,7 +454,9 @@ systemctl enable --now cardiosensai-purge.timer >/dev/null
 
 # ---------------------------------------------------------------- device broker + bridge
 log "Configuring the device broker (Mosquitto) and bridge"
-install -m 0640 -o root -g mosquitto "$SRC_DIR/scripts/mosquitto/cardiosens.acl" /etc/mosquitto/cardiosens.acl
+# Mosquitto 2.1 wants its password and ACL files owned by mosquitto and not world-readable.
+install -m 0600 -o mosquitto -g mosquitto "$SRC_DIR/scripts/mosquitto/cardiosens.acl" /etc/mosquitto/cardiosens.acl
+MQTT_PASSWD=/etc/mosquitto/cardiosens.passwd
 MQTT_TLS_CONF=""
 if [[ -n $DOMAIN && $TLS -eq 1 && -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
   # Mosquitto can't read /etc/letsencrypt: keep a copy it owns, refreshed by certbot after every renewal.
@@ -483,7 +486,7 @@ listener 1883 127.0.0.1
 $MQTT_TLS_CONF
 
 allow_anonymous false
-password_file $MQTT_DIR/passwd
+password_file $MQTT_PASSWD
 acl_file /etc/mosquitto/cardiosens.acl
 use_username_as_clientid true
 max_packet_size 600000
@@ -500,17 +503,20 @@ PathChanged=$MQTT_DIR/passwd
 [Install]
 WantedBy=multi-user.target
 UNIT
-cat >/etc/systemd/system/cardiosensai-mqtt-logins.service <<'UNIT'
+cat >/etc/systemd/system/cardiosensai-mqtt-logins.service <<UNIT
 [Unit]
-Description=Reload Mosquitto (CardiosensAI device logins changed)
+Description=Copy CardiosensAI device logins to Mosquitto and reload it
 
 [Service]
 Type=oneshot
-ExecStart=/bin/systemctl reload mosquitto
+ExecStart=/usr/bin/install -m 0600 -o mosquitto -g mosquitto $MQTT_DIR/passwd $MQTT_PASSWD
+ExecStart=/bin/systemctl try-reload-or-restart mosquitto
 UNIT
 # The first password file, before Mosquitto starts (the bridge rewrites it on every start)
 run_app $VENV/bin/python -c "from app.core.db import SessionLocal; from app.services.device_hub import sync_broker_logins; db = SessionLocal(); sync_broker_logins(db); db.close()" \
   || warn "Couldn't write the broker logins yet; the bridge writes them when it starts"
+[[ -f $MQTT_DIR/passwd ]] || install -m 0640 -o $APP_USER -g $APP_USER /dev/null $MQTT_DIR/passwd
+install -m 0600 -o mosquitto -g mosquitto $MQTT_DIR/passwd $MQTT_PASSWD
 cat >/etc/systemd/system/$MQTT_SERVICE.service <<UNIT
 [Unit]
 Description=CardiosensAI device bridge (MQTT <-> database)
