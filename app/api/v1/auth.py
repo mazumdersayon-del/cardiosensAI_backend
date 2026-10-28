@@ -427,6 +427,7 @@ def register(body: RegisterIn, db: Session = Depends(get_db), meta: RequestMeta 
         "doctor": body.doctor.model_dump() if body.doctor else None,
         "clinic": body.clinic.model_dump() if body.clinic else None,
         "blocked": phone_taken or email_taken,
+        "email_taken": email_taken,
         "sms_skipped": not sms_up,
     }
     primary, sms_code = otp.create(db, channel="sms", purpose="signup", phone=body.phone, payload=payload)
@@ -479,7 +480,13 @@ def register_resend(body: SignupIdIn, db: Session = Depends(get_db), meta: Reque
     if email_ch is not None:
         codes["email"] = otp.renew(email_ch)
     db.commit()
-    if not payload.get("blocked"):
+    if payload.get("blocked"):  # same emails as the first send: a code to a free address, a notice to a taken one
+        if email_ch is not None:
+            if payload.get("email_taken", True):
+                email.send_registration_attempt(email_ch.email or "")
+            else:
+                otp.deliver(email_ch, codes["email"], payload.get("full_name"))
+    else:
         if not payload.get("sms_skipped"):
             try:
                 otp.deliver(primary, codes["sms"], payload.get("full_name"))
@@ -516,7 +523,9 @@ def register_verify(
         otp.check(db, email_ch, body.email_code, purpose="signup")
     p = primary.payload or {}
     if p.get("blocked"):
-        raise otp.INVALID
+        # Every code this sign-up needs was right, so the person controls these addresses. Only possible while SMS is
+        # down (otherwise a taken number gets a notice instead of its code): the email is theirs, the number has an account.
+        raise conflict("already_registered", "This mobile number or email already has an account. Sign in instead.")
     if not sms_skipped:
         released = release_unconfirmed_phone(db, primary.phone or "")
         if released is not None:

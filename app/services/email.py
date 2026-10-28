@@ -7,6 +7,7 @@ EMAIL_PROVIDER:
 """
 
 import logging
+import re
 import smtplib
 import ssl
 from dataclasses import dataclass
@@ -58,7 +59,8 @@ def send_email(to: str, subject: str, body: str) -> bool:
         except (OSError, smtplib.SMTPException) as exc:
             log.error("email_send_failed", extra={"extra_fields": {"to": mask_email(to), "error": type(exc).__name__}})
             return False
-        log.info("email_sent", extra={"extra_fields": {"to": mask_email(to), "subject": subject}})
+        # one-time codes are in the subject: never log them
+        log.info("email_sent", extra={"extra_fields": {"to": mask_email(to), "subject": re.sub(r"\d{6}", "••••••", subject)}})
         return True
     log.error("email_send_failed", extra={"extra_fields": {"to": mask_email(to), "error": "no email provider configured"}})
     return False

@@ -116,3 +116,56 @@ def test_sign_in_by_number_while_sms_is_down_points_to_email_or_password(client,
     assert started["channel"] == "email" and started["devOtherCode"] is None  # no SMS second code while it's down
     assert client.post("/v1/auth/login/verify", json={"challengeId": started["challengeId"], "code": started["devCode"]}).status_code == 200
     assert client.post("/v1/auth/login", json={"identifier": "+919811111120", "password": PASSWORD}).status_code == 200
+
+
+def test_sign_up_with_a_registered_number_while_sms_is_down_says_so_after_the_email_code(client, monkeypatch, caplog):
+    """Regression (production 2026-10-28): the email code arrived, verify said "incorrect or expired" and resend sent nothing."""
+    monkeypatch.setattr(config.get_settings(), "sms_provider", "none")
+    first = _register(client, "+919811111121", "first@example.com", "First Owner").json()
+    assert (
+        client.post("/v1/auth/register/verify", json={"signupId": first["signupId"], "emailCode": first["devEmailCode"]}).status_code == 200
+    )
+
+    mails = len(email.outbox)
+    st = _register(client, "+919811111121", "second@example.com", "Second Person").json()
+    assert st["phoneCodeSent"] is False and len(email.outbox) == mails + 1  # looks like any sign-up: an email code goes out
+    code = email.outbox[-1].body.split("\n\n    ")[1][:6]
+    r = client.post("/v1/auth/register/verify", json={"signupId": st["signupId"], "emailCode": code})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "already_registered"  # proved the email: tell them why
+
+    again = client.post("/v1/auth/register/resend", json={"signupId": st["signupId"]})
+    assert again.status_code == 200 and len(email.outbox) == mails + 2  # resend behaves like the first send
+
+
+def test_one_time_codes_never_reach_the_log(client, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(config.get_settings(), "email_provider", "smtp")
+    monkeypatch.setattr(config.get_settings(), "smtp_host", "smtp.invalid")
+
+    class FakeSMTP:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self, **k):
+            pass
+
+        def login(self, *a):
+            pass
+
+        def send_message(self, msg):
+            pass
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    with caplog.at_level(logging.INFO, logger="cardiosensai.email"):
+        assert email.send_code("asha@example.com", "Asha", "482913", purpose="signup")
+    logged = " ".join(str(getattr(r, "extra_fields", "")) + r.getMessage() for r in caplog.records)
+    assert "email_sent" in logged and "482913" not in logged
