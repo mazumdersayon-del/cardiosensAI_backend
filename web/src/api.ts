@@ -97,6 +97,7 @@ export interface User {
   patientCode: string | null;
   mfaEnabled: boolean;
   createdAt: string;
+  avatarVersion?: string | null; // set when there is a profile picture (GET /v1/me/avatar)
 }
 
 export interface TokenOut {
@@ -151,6 +152,7 @@ export interface LatestValue {
   diastolic: number | null;
   unit: string;
   measuredAt: string;
+  provenance?: { acquisition: string };
 }
 
 export interface EcgBrief {
@@ -293,11 +295,11 @@ export interface MedDocument {
 }
 
 /** multipart/form-data upload (the browser sets the boundary). */
-export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+export async function apiUpload<T>(path: string, form: FormData, method: 'POST' | 'PUT' = 'POST'): Promise<T> {
   const send = () => {
     const headers: Record<string, string> = { 'X-CS-Web': '1' };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-    return fetch(path, { method: 'POST', headers, body: form, credentials: 'same-origin' });
+    return fetch(path, { method, headers, body: form, credentials: 'same-origin' });
   };
   let res = await send();
   if (res.status === 401 && (await refreshSession())) res = await send();
@@ -495,4 +497,59 @@ export function parseIdentifier(raw: string): { kind: 'email' | 'phone'; value: 
   if (/^\d{10}$/.test(d)) d = `+91${d}`;
   else if (/^00[1-9]\d{7,14}$/.test(d)) d = `+${d.slice(2)}`;
   return /^\+[1-9]\d{7,14}$/.test(d) ? { kind: 'phone', value: d } : { error: 'Enter your email address, or your mobile number with the country code (e.g. +91 98765 43210).' };
+}
+
+export interface DoctorCard {
+  uniqueId: string;
+  fullName: string;
+  specialty: string | null;
+  degrees: string | null;
+  experienceYears: number | null;
+  practice: string | null;
+  city: string | null;
+  avatarVersion: string | null;
+}
+
+export interface Doctor extends DoctorCard {
+  languages: string | null;
+  about: string | null;
+  council: string;
+  verifiedAt: string | null;
+  linkStatus: 'none' | 'pending' | 'active';
+}
+
+export interface DoctorListing {
+  listed: boolean;
+  degrees: string | null;
+  experienceYears: number | null;
+  languages: string | null;
+  practice: string | null;
+  city: string | null;
+  about: string | null;
+  specialty: string | null;
+  visible: boolean;
+  hiddenReason: string | null;
+}
+
+export interface DeviceModel {
+  code: string;
+  name: string;
+  manufacturer: string;
+  kind: string;
+  capabilities: string[];
+}
+
+export interface RegisteredDevice {
+  id: string;
+  deviceUid: string | null;
+  modelCode: string;
+  modelName: string;
+  kind: string;
+  capabilities: string[];
+  serial: string;
+  displayName: string;
+  firmware: string | null;
+  batteryPct: number | null;
+  registeredAt: string;
+  lastSeenAt: string | null;
 }

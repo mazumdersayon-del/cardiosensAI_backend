@@ -229,27 +229,16 @@ def live_out(sess: EcgLiveSession) -> EcgLiveOut:
     )
 
 
-def _own_live(db: Session, user: User, session_id: uuid.UUID) -> EcgLiveSession:
-    sess = db.get(EcgLiveSession, session_id, with_for_update=True)
-    if sess is None or sess.patient_id != user.id:
-        raise not_found("Live session")
-    return sess
-
-
-@router.post("/ecg-live", response_model=EcgLiveOut, status_code=201, summary="Start a live ECG (ends any live ECG already running)")
-def start_live(
-    body: EcgLiveStartIn, user: User = Depends(require_patient), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
-) -> EcgLiveOut:
-    limiter.hit(f"ecg-live:{user.id}", 30, 3600)
+def start_session(db: Session, patient: User, device: Device, body: EcgLiveStartIn, acquisition: str = "live") -> EcgLiveSession:
+    """Begin a live ECG for `patient` from `device`, ending any live ECG already running. Caller audits and commits."""
     leads = check_leads(body.leads)
-    device = _device_for(db, user, body.device_id)
     started = to_utc(body.started_at) if body.started_at else utcnow()
     if started > utcnow() + timedelta(minutes=5):
         raise bad_request("future_timestamp", "Recording start is in the future")
-    for old in db.scalars(select(EcgLiveSession).where(EcgLiveSession.patient_id == user.id, EcgLiveSession.status == "live")):
+    for old in db.scalars(select(EcgLiveSession).where(EcgLiveSession.patient_id == patient.id, EcgLiveSession.status == "live")):
         finalize(db, old)
     sess = EcgLiveSession(
-        patient_id=user.id,
+        patient_id=patient.id,
         device_id=device.id,
         leads=leads,
         sample_rate_hz=body.sample_rate_hz,
@@ -259,19 +248,14 @@ def start_live(
         utc_offset_min=offset_minutes(body.started_at) if body.started_at else 0,
         frames=0,
         status="live",
+        acquisition=acquisition,
     )
     db.add(sess)
     db.flush()
-    audit.record(db, actor=user, action="ecg.live_start", patient_id=user.id, resource_type="ecg_live", resource_id=sess.id, meta=meta)
-    db.commit()
-    return live_out(sess)
+    return sess
 
 
-@router.post("/ecg-live/{session_id}/chunks", response_model=EcgLiveOut, summary="Append frames to a live ECG (idempotent on seq)")
-def add_live_chunk(
-    session_id: uuid.UUID, body: EcgLiveChunkIn, user: User = Depends(require_patient), db: Session = Depends(get_db)
-) -> EcgLiveOut:
-    sess = _own_live(db, user, session_id)
+def append_chunk(db: Session, sess: EcgLiveSession, body: EcgLiveChunkIn) -> EcgLiveOut:
     if sess.status != "live":
         raise conflict("session_ended", "This live ECG has ended. Start a new one")
     if db.scalar(select(EcgLiveChunk.id).where(EcgLiveChunk.session_id == sess.id, EcgLiveChunk.seq == body.seq)) is not None:
@@ -295,6 +279,31 @@ def add_live_chunk(
         sess.average_hr = body.average_hr
     db.commit()
     return live_out(sess)
+
+
+def _own_live(db: Session, user: User, session_id: uuid.UUID) -> EcgLiveSession:
+    sess = db.get(EcgLiveSession, session_id, with_for_update=True)
+    if sess is None or sess.patient_id != user.id:
+        raise not_found("Live session")
+    return sess
+
+
+@router.post("/ecg-live", response_model=EcgLiveOut, status_code=201, summary="Start a live ECG (ends any live ECG already running)")
+def start_live(
+    body: EcgLiveStartIn, user: User = Depends(require_patient), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+) -> EcgLiveOut:
+    limiter.hit(f"ecg-live:{user.id}", 30, 3600)
+    sess = start_session(db, user, _device_for(db, user, body.device_id), body)
+    audit.record(db, actor=user, action="ecg.live_start", patient_id=user.id, resource_type="ecg_live", resource_id=sess.id, meta=meta)
+    db.commit()
+    return live_out(sess)
+
+
+@router.post("/ecg-live/{session_id}/chunks", response_model=EcgLiveOut, summary="Append frames to a live ECG (idempotent on seq)")
+def add_live_chunk(
+    session_id: uuid.UUID, body: EcgLiveChunkIn, user: User = Depends(require_patient), db: Session = Depends(get_db)
+) -> EcgLiveOut:
+    return append_chunk(db, _own_live(db, user, session_id), body)
 
 
 @router.post("/ecg-live/{session_id}/stop", response_model=EcgLiveOut, summary="Stop a live ECG; it becomes a normal recording")

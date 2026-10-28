@@ -8,10 +8,30 @@ interface Latest {
   sharedVitals: string[];
 }
 
-export function LatestVitals({ patientId }: { patientId: string }) {
+/** Latest value of each vital. `compact`: one slim row (patient home strip). */
+export function LatestVitals({ patientId, compact = false }: { patientId: string; compact?: boolean }) {
   const [data, err] = useLoad(() => api<Latest>('GET', `/v1/patients/${patientId}/measurements/latest`), [patientId]);
   if (err) return <p className="muted">{err}</p>;
   if (!data) return <p className="muted">Loading…</p>;
+  if (compact)
+    return (
+      <ul className="vitals-strip">
+        {VITALS.map((v) => {
+          const m = data.latest[v.key];
+          return (
+            <li key={v.key} title={m ? `${v.name}: measured ${when(m.measuredAt)}` : `${v.name}: no reading`}>
+              <span className="n">{v.name}</span>
+              <span className="v">{m ? vitalValue(m) : '—'}</span>
+              <span className="u">{v.unit}</span>
+              <span className="a">
+                {m ? ago(m.measuredAt) : 'none'}
+                {m?.provenance?.acquisition === 'simulated' && <span className="sim-tag" title="Simulated (test data)">SIM</span>}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    );
   return (
     <div className="vitals">
       {VITALS.map((v) => {

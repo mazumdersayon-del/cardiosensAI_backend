@@ -115,6 +115,7 @@ class EcgLiveSession(Base):
     frames: Mapped[int] = mapped_column(Integer, default=0)
     average_hr: Mapped[int | None] = mapped_column(SmallInteger)
     status: Mapped[str] = mapped_column(String(12), default="live")  # live | stopped
+    acquisition: Mapped[str] = mapped_column(String(12), default="live", server_default="live")  # live | simulated (test stream)
     recording_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ecg_recordings.id", ondelete="SET NULL"))
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 

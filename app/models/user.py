@@ -2,6 +2,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Uuid
+from sqlalchemy import false as sa_false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, JSONType, UTCDateTime, utcnow
@@ -33,6 +34,8 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(120))
     date_of_birth: Mapped[date | None] = mapped_column(Date)
     emergency_contact: Mapped[str | None] = mapped_column(String(120))
+    avatar_key: Mapped[str | None] = mapped_column(String(200))  # profile picture in storage (JPEG/PNG, resized by the client)
+    avatar_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Short, human-friendly identifier printed on reports (e.g. CS-P-0004812).
     patient_code: Mapped[str | None] = mapped_column(String(20), unique=True)
     preferences: Mapped[dict] = mapped_column(JSONType, default=dict)  # units, notification switches
@@ -84,6 +87,15 @@ class ProfessionalProfile(Base):
     verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     submitted_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     review_note: Mapped[str | None] = mapped_column(String(300))  # reason given with a rejection / revocation (shown to the doctor)
+    # Patients' "Doctors" list: shown only when the doctor opts in (listed) and is verified, active and on TOTP.
+    # Editing these never sends the account back for verification.
+    listed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
+    degrees: Mapped[str | None] = mapped_column(String(160))  # e.g. "MBBS, MD (Medicine), DM (Cardiology)"
+    experience_years: Mapped[int | None] = mapped_column(Integer)
+    languages: Mapped[str | None] = mapped_column(String(160))
+    practice: Mapped[str | None] = mapped_column(String(160))  # hospital / clinic where they see patients
+    city: Mapped[str | None] = mapped_column(String(80))
+    about: Mapped[str | None] = mapped_column(String(800))
 
 
 class Consent(Base):

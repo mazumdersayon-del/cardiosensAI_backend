@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react';
-import { api, ApiError, type Organization, type ProfessionalProfile } from '../api';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { api, ApiError, type DoctorListing, type Organization, type ProfessionalProfile } from '../api';
 import { useAuth } from '../auth';
+import { AvatarEditor } from '../components/Avatar';
 import { ContactDetails } from '../components/Contact';
+import { DevicesSection } from '../components/Devices';
+import IdCard from '../components/IdCard';
 import { LicenceSection } from '../components/Licence';
 import PhoneInput from '../components/PhoneInput';
 import { MfaSetup } from '../components/Setup';
 import { Banner, errorText, StatusPill } from '../components/ui';
-import { formatId, ROLE_LABEL } from '../format';
+import { day, formatId, ROLE_LABEL } from '../format';
 
 type Msg = { kind: 'ok' | 'error'; text: string } | null;
 
@@ -33,18 +36,7 @@ function Profile() {
         }
       }}
     >
-      <dl className="row" style={{ gap: 24, margin: 0 }}>
-        <div>
-          <dt className="muted">ID</dt>
-          <dd className="mono" style={{ margin: 0 }}>
-            {formatId(user.uniqueId)}
-          </dd>
-        </div>
-        <div>
-          <dt className="muted">Account type</dt>
-          <dd style={{ margin: 0 }}>{ROLE_LABEL[user.role]}</dd>
-        </div>
-      </dl>
+      <AvatarEditor />
       <label className="field">
         {user.role === 'clinic' ? 'Your name' : 'Full name'}
         <input value={name} onChange={(e) => setName(e.target.value)} minLength={2} required />
@@ -124,6 +116,70 @@ function DoctorDetails() {
   );
 }
 
+/** Doctors: the card patients see in their Doctors list, and whether to be listed at all. */
+function DoctorListingSection() {
+  const [f, setF] = useState({ listed: false, degrees: '', experienceYears: '', languages: '', practice: '', city: '', about: '' });
+  const [l, setL] = useState<DoctorListing | null>(null);
+  const [msg, setMsg] = useState<Msg>(null);
+  const fill = (x: DoctorListing) => {
+    setL(x);
+    setF({ listed: x.listed, degrees: x.degrees ?? '', experienceYears: x.experienceYears?.toString() ?? '', languages: x.languages ?? '', practice: x.practice ?? '', city: x.city ?? '', about: x.about ?? '' });
+  };
+  useEffect(() => {
+    api<DoctorListing>('GET', '/v1/me/doctor-listing').then(fill, (e) => setMsg({ kind: 'error', text: errorText(e) }));
+  }, []);
+  const text = (key: 'degrees' | 'languages' | 'practice' | 'city', label: string, hint?: string, max = 160) => (
+    <label className="field">
+      {label}
+      {hint && <small className="muted">{hint}</small>}
+      <input value={f[key]} maxLength={max} onChange={(e) => setF({ ...f, [key]: e.target.value })} />
+    </label>
+  );
+  return (
+    <form
+      className="stack"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        try {
+          const n = f.experienceYears.trim();
+          fill(await api<DoctorListing>('PUT', '/v1/me/doctor-listing', { ...f, experienceYears: n ? Number(n) : null }));
+          setMsg({ kind: 'ok', text: 'Saved.' });
+        } catch (ex) {
+          setMsg({ kind: 'error', text: errorText(ex) });
+        }
+      }}
+    >
+      <label className="row" style={{ gap: 10, fontWeight: 600 }}>
+        <input type="checkbox" checked={f.listed} onChange={(e) => setF({ ...f, listed: e.target.checked })} />
+        Show me in the patients’ Doctors list
+      </label>
+      {l && (l.visible ? <Banner kind="ok">Patients can see your card now.</Banner> : l.listed && l.hiddenReason ? <Banner kind="info">{l.hiddenReason}</Banner> : null)}
+      <p className="muted" style={{ margin: 0 }}>
+        Patients see your name, picture, specialty ({l?.specialty || 'set it under Registration details'}), registration council and the details below. Your mobile number and email are never shown. Saving these doesn’t affect your verification.
+      </p>
+      {text('degrees', 'Degrees', 'For example: MBBS, MD (Medicine), DM (Cardiology)')}
+      <label className="field">
+        Years of experience
+        <input type="number" min={0} max={70} value={f.experienceYears} onChange={(e) => setF({ ...f, experienceYears: e.target.value })} />
+      </label>
+      {text('practice', 'Hospital or clinic', 'Where you see patients')}
+      {text('city', 'City', undefined, 80)}
+      {text('languages', 'Languages', 'For example: English, Hindi, Bengali')}
+      <label className="field">
+        About you
+        <small className="muted">What you treat and how patients can work with you (up to 800 characters).</small>
+        <textarea rows={4} maxLength={800} value={f.about} onChange={(e) => setF({ ...f, about: e.target.value })} />
+      </label>
+      {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
+      <div>
+        <button type="submit" className="btn primary">
+          Save
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function ClinicDetails() {
   const { reload, status } = useAuth();
   const [o, setO] = useState<Organization | null>(null);
@@ -181,12 +237,18 @@ function ChangePassword() {
   const has = user?.hasPassword !== false;
   const [cur, setCur] = useState('');
   const [pw, setPw] = useState('');
+  const [again, setAgain] = useState('');
   const [msg, setMsg] = useState<Msg>(null);
+  const mismatch = again.length > 0 && again !== pw;
   return (
     <form
       className="stack"
       onSubmit={async (e) => {
         e.preventDefault();
+        if (pw !== again) {
+          setMsg({ kind: 'error', text: 'The two new passwords don’t match.' });
+          return;
+        }
         try {
           await api('POST', '/v1/auth/password/change', { currentPassword: has ? cur : null, newPassword: pw });
           setMsg({ kind: 'ok', text: `Password ${has ? 'changed' : 'set'}. Signing you out of every device…` });
@@ -208,9 +270,27 @@ function ChangePassword() {
         New password
         <input type="password" autoComplete="new-password" minLength={10} value={pw} onChange={(e) => setPw(e.target.value)} required />
       </label>
+      <label className="field">
+        Re-enter new password
+        <input
+          type="password"
+          autoComplete="new-password"
+          minLength={10}
+          value={again}
+          onChange={(e) => setAgain(e.target.value)}
+          required
+          aria-invalid={mismatch}
+          aria-describedby="pw-again-hint"
+        />
+        {mismatch && (
+          <small id="pw-again-hint" style={{ color: 'var(--danger)' }}>
+            Doesn’t match the new password yet.
+          </small>
+        )}
+      </label>
       {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
       <div>
-        <button type="submit" className="btn primary">
+        <button type="submit" className="btn primary" disabled={mismatch}>
           {has ? 'Change password' : 'Set password'}
         </button>
       </div>
@@ -218,46 +298,124 @@ function ChangePassword() {
   );
 }
 
-export default function Settings() {
+function IdSection() {
   const { user } = useAuth();
   if (!user) return null;
+  const extra =
+    user.role === 'patient'
+      ? [user.patientCode && `Report code ${user.patientCode}`, user.dateOfBirth && `Born ${day(user.dateOfBirth)}`].filter(Boolean).join(' · ')
+      : 'Patients, doctors and clinics use this ID to send you link requests.';
+  return <IdCard uid={user.uniqueId} name={user.fullName} role={user.role} extra={extra || undefined} />;
+}
+
+type Section = { id: string; label: string; hint: string; body: ReactNode };
+
+function sectionsFor(role: string): Section[] {
+  const pro = role === 'doctor' || role === 'clinic';
+  const list: (Section | false)[] = [
+    { id: 'id', label: 'Your ID', hint: 'Give it to a doctor or clinic (or let them scan the QR code) so they can send you a link request.', body: <IdSection /> },
+    { id: 'profile', label: 'Profile', hint: 'Your picture, name' + (role === 'patient' ? ', date of birth and emergency contact.' : '.'), body: <Profile /> },
+    { id: 'contact', label: 'Mobile and email', hint: 'Where your sign-in codes and messages go.', body: <ContactDetails /> },
+    role === 'doctor' && { id: 'registration', label: 'Registration details', hint: 'Checked by CardiosensAI before you can see patients.', body: <DoctorDetails /> },
+    role === 'doctor' && { id: 'listing', label: 'Doctors list', hint: 'Your card in the patients’ Doctors list. You choose whether to appear.', body: <DoctorListingSection /> },
+    role === 'clinic' && { id: 'clinic', label: 'Clinic details', hint: 'Checked by CardiosensAI before the clinic can see patients.', body: <ClinicDetails /> },
+    role !== 'admin' && {
+      id: 'devices',
+      label: 'Devices',
+      hint: role === 'patient' ? 'The devices that send your readings and ECGs. A device can be registered to one account at a time.' : 'Your own equipment, such as a 12-lead monitor. It records for patients who have linked with you.',
+      body: <DevicesSection />,
+    },
+    pro && { id: 'documents', label: 'Verification documents', hint: 'Your registration or licence certificate.', body: <LicenceSection /> },
+    { id: 'security', label: 'Two-step sign-in', hint: 'A code from an authenticator app when you sign in.', body: <MfaSetup /> },
+    { id: 'password', label: 'Password', hint: 'At least 10 characters. Changing it signs you out everywhere.', body: <ChangePassword /> },
+  ];
+  return list.filter((x): x is Section => !!x);
+}
+
+/** Account: one continuous page, a sticky menu on the left that follows the scroll and jumps to each section. */
+export default function Settings() {
+  const { user } = useAuth();
+  const sections = sectionsFor(user?.role ?? 'patient');
+  const [active, setActive] = useState(sections[0].id);
+  const navRef = useRef<HTMLElement>(null);
+
+  // phones show the menu as a sideways strip: keep the current section's tab in view
+  useEffect(() => {
+    const nav = navRef.current;
+    const link = nav?.querySelector<HTMLElement>(`a[href="#${active}"]`);
+    if (nav && link && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = link.offsetLeft - (nav.clientWidth - link.offsetWidth) / 2;
+  }, [active]);
+
+  useEffect(() => {
+    // a link to a section (/settings#password): jump now and once more after the sections above have loaded their data
+    const hash = window.location.hash.slice(1);
+    const jump = () => document.getElementById(hash)?.scrollIntoView();
+    let rejump: number | undefined;
+    if (hash) {
+      jump();
+      rejump = window.setTimeout(jump, 600);
+    }
+    const seen = new Map<string, boolean>();
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) seen.set(e.target.id, e.isIntersecting);
+        const first = sections.find((x) => seen.get(x.id));
+        if (first) setActive(first.id);
+      },
+      { rootMargin: '-90px 0px -55% 0px' }, // a section counts as current once its top passes under the header
+    );
+    for (const x of sections) {
+      const el = document.getElementById(x.id);
+      if (el) io.observe(el);
+    }
+    // short last sections never reach the top: at the bottom of the page the last one is current
+    const atEnd = () => {
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) setActive(sections[sections.length - 1].id);
+    };
+    window.addEventListener('scroll', atEnd, { passive: true });
+    return () => {
+      window.clearTimeout(rejump);
+      io.disconnect();
+      window.removeEventListener('scroll', atEnd);
+    };
+  }, [user?.role]);
+
+  if (!user) return null;
+  const go = (id: string) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    document.getElementById(id)?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    window.history.replaceState(null, '', `#${id}`);
+    setActive(id);
+  };
   return (
-    <div className="grid">
-      <h1 className="span-12">Account</h1>
-      <section className="card span-6">
-        <h2>Profile</h2>
-        <Profile />
-      </section>
-      <section className="card span-6">
-        <h2>Mobile and email</h2>
-        <ContactDetails />
-      </section>
-      <section className="card span-6">
-        <h2>Two-step sign-in</h2>
-        <MfaSetup />
-      </section>
-      {user.role === 'doctor' && (
-        <section className="card span-6">
-          <h2>Registration details</h2>
-          <DoctorDetails />
-        </section>
-      )}
-      {user.role === 'clinic' && (
-        <section className="card span-6">
-          <h2>Clinic details</h2>
-          <ClinicDetails />
-        </section>
-      )}
-      {(user.role === 'doctor' || user.role === 'clinic') && (
-        <section className="card span-6">
-          <h2>Verification documents</h2>
-          <LicenceSection />
-        </section>
-      )}
-      <section className="card span-6">
-        <h2>Password</h2>
-        <ChangePassword />
-      </section>
+    <div className="account">
+      <aside className="account-nav" aria-label="Account sections">
+        <div className="account-who">
+          <strong>{user.fullName || user.email}</strong>
+          <span className="muted mono">
+            {ROLE_LABEL[user.role]} · {formatId(user.uniqueId)}
+          </span>
+        </div>
+        <nav ref={navRef}>
+          {sections.map((x) => (
+            <a key={x.id} href={`#${x.id}`} onClick={go(x.id)} className={active === x.id ? 'active' : undefined} aria-current={active === x.id ? 'true' : undefined}>
+              {x.label}
+            </a>
+          ))}
+        </nav>
+      </aside>
+      <div className="account-body">
+        <h1>Account</h1>
+        {sections.map((x) => (
+          <section key={x.id} id={x.id} className="account-section" aria-labelledby={`${x.id}-h`}>
+            <header>
+              <h2 id={`${x.id}-h`}>{x.label}</h2>
+              <p className="muted">{x.hint}</p>
+            </header>
+            <div className="account-content">{x.body}</div>
+          </section>
+        ))}
+      </div>
     </div>
   );
 }

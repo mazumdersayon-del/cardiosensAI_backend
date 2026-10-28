@@ -38,10 +38,22 @@ class Device(Base):
             sqlite_where=text("status = 'active'"),
         ),
         UniqueConstraint("patient_id", "client_ref", name="uq_devices_patient_client_ref"),
+        Index(
+            "uq_devices_active_uid",
+            "device_uid",
+            unique=True,
+            postgresql_where=text("status = 'active' AND device_uid IS NOT NULL"),
+            sqlite_where=text("status = 'active' AND device_uid IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    # The owner. Usually the patient whose readings it takes; for a doctor's or clinic's device (Account → Devices) it is
+    # that doctor/clinic login, and it records for linked patients through the device stream.
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # The device's own unique id (printed on it / in its firmware); with the serial it identifies the device
+    # to the device stream. Unique among active devices.
+    device_uid: Mapped[str | None] = mapped_column(String(64))
     model_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("device_models.id"))
     serial: Mapped[str] = mapped_column(String(64))
     # The id the mobile app gave this device locally; lets the app keep sending its own ids.

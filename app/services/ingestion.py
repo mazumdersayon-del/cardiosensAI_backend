@@ -94,9 +94,18 @@ def _check_time(m: MeasurementIn, now: datetime) -> None:
         raise Rejection("too_old", "Measurement is older than five years")
 
 
-def _resolve_device(db: Session, patient: User, m: MeasurementIn, cache: dict[str, Device | None]) -> Device | None:
+def _resolve_device(
+    db: Session, patient: User, m: MeasurementIn, cache: dict[str, Device | None], stream: Device | None = None, simulated: bool = False
+) -> Device | None:
     acq = m.provenance.acquisition
     dev_ref = m.provenance.device_id
+    if stream is not None:
+        # Device stream: the server already identified the device (and, for a doctor's/clinic's device, the link).
+        if acq != ("simulated" if simulated else "live") or dev_ref != str(stream.id):
+            raise Rejection("unknown_device", "Readings from a device stream must name that device")
+        if m.vital not in stream.model.capabilities:
+            raise Rejection("unsupported_vital", f"{stream.model.name} isn't approved to measure {m.vital}")
+        return stream
     if acq == "simulated":
         raise Rejection("simulated", "Simulated readings are never stored as health data")
     if acq == "manual":
@@ -125,7 +134,10 @@ def _resolve_device(db: Session, patient: User, m: MeasurementIn, cache: dict[st
     return device
 
 
-def ingest_batch(db: Session, patient: User, items: list[dict]) -> list[BatchItemResult]:
+def ingest_batch(
+    db: Session, patient: User, items: list[dict], stream: Device | None = None, simulated: bool = False
+) -> list[BatchItemResult]:
+    """`stream`: readings from a device stream (`api/v1/device_stream.py`); `simulated` only for test streams."""
     now = utcnow()
     results: list[BatchItemResult] = []
     device_cache: dict[str, Device | None] = {}
@@ -143,7 +155,7 @@ def ingest_batch(db: Session, patient: User, items: list[dict]) -> list[BatchIte
                 raise Rejection("invalid_format", f"Invalid field: {field}") from exc
             _check_values(m)
             _check_time(m, now)
-            device = _resolve_device(db, patient, m, device_cache)
+            device = _resolve_device(db, patient, m, device_cache, stream, simulated)
             h = _hash(m)
 
             if m.id in seen_in_batch:

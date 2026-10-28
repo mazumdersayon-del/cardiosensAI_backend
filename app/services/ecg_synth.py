@@ -9,7 +9,7 @@ import math
 import random
 import struct
 
-from app.services.ecg import STANDARD_12
+from app.core.ecg_leads import STANDARD_12
 
 # (centre within beat in s, width in s) for P, Q, R, S, T
 WAVES = ((0.10, 0.025), (0.205, 0.008), (0.23, 0.010), (0.255, 0.010), (0.45, 0.040))

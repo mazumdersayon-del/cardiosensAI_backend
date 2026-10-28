@@ -249,10 +249,84 @@ function Comments({ doc, onChange }: { doc: MedDocument; onChange: () => void })
 }
 
 /** Uploaded documents for one patient (patient: 'me'). Patients and linked doctors/clinics upload; doctors comment. */
+/** One document: title, type, who uploaded it, files, note, comments, delete. */
+export function DocumentItem({ d, onChange }: { d: MedDocument; onChange: () => void }) {
+  const [confirm, setConfirm] = useState(false);
+  return (
+    <article className="doc-card">
+      <header className="row spread">
+        <div>
+          <h3 style={{ margin: 0 }}>{d.title}</h3>
+          <small className="muted">
+            {CATEGORIES[d.category] ?? d.category}
+            {d.documentDate ? ` · dated ${day(d.documentDate)}` : ''} · uploaded by {d.uploaderName ?? 'removed account'} (
+            {ROLE_LABEL[d.uploaderRole] ?? d.uploaderRole}) {when(d.createdAt)}
+          </small>
+        </div>
+        {d.canDelete &&
+          (confirm ? (
+            <div className="row" style={{ gap: 6 }}>
+              <button
+                type="button"
+                className="btn danger small"
+                onClick={async () => {
+                  await api('DELETE', `/v1/documents/${d.id}`);
+                  setConfirm(false);
+                  onChange();
+                }}
+              >
+                Delete
+              </button>
+              <button type="button" className="btn ghost small" onClick={() => setConfirm(false)}>
+                Keep
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="btn ghost small" onClick={() => setConfirm(true)}>
+              Delete…
+            </button>
+          ))}
+      </header>
+      {d.note && <p style={{ margin: 0 }}>{d.note}</p>}
+      <div className="doc-files">
+        {d.files.map((f) => (
+          <Thumb key={f.id} docId={d.id} file={f} />
+        ))}
+      </div>
+      {(d.comments.length > 0 || d.canComment) && <Comments doc={d} onChange={onChange} />}
+    </article>
+  );
+}
+
+/** The upload form behind a button (patient home: "Reports and documents" card; the History card lists what was uploaded). */
+export function DocumentUpload({ patientId, onDone }: { patientId: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [done, setDone] = useState(false);
+  return (
+    <div className="stack" style={{ gap: 10 }}>
+      <div className="row" style={{ gap: 10 }}>
+        <button type="button" className={`btn ${open ? 'ghost' : 'primary'} small`} onClick={() => setOpen(!open)} aria-expanded={open}>
+          {open ? 'Close' : 'Upload documents'}
+        </button>
+        {done && !open && <small className="muted">Uploaded. It is at the top of History.</small>}
+      </div>
+      {open && (
+        <UploadForm
+          patientId={patientId}
+          onDone={() => {
+            setOpen(false);
+            setDone(true);
+            onDone();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function DocumentsPanel({ patientId }: { patientId: string }) {
   const [docs, err, reload] = useLoad(() => api<MedDocument[]>('GET', `/v1/patients/${patientId}/documents`), [patientId]);
   const [showUpload, setShowUpload] = useState(false);
-  const [confirm, setConfirm] = useState<string | null>(null);
   const [filter, setFilter] = useState('all');
   const shown = (docs ?? []).filter((d) => filter === 'all' || d.category === filter);
   return (
@@ -282,48 +356,7 @@ export default function DocumentsPanel({ patientId }: { patientId: string }) {
       {err && <p className="muted">{err}</p>}
       {docs && !shown.length && <div className="empty">{docs.length ? 'No documents of this type.' : 'No documents yet. Upload lab reports, prescriptions or scans as PDF or JPEG.'}</div>}
       {shown.map((d) => (
-        <article key={d.id} className="doc-card">
-          <header className="row spread">
-            <div>
-              <h3 style={{ margin: 0 }}>{d.title}</h3>
-              <small className="muted">
-                {CATEGORIES[d.category] ?? d.category}
-                {d.documentDate ? ` · dated ${day(d.documentDate)}` : ''} · uploaded by {d.uploaderName ?? 'removed account'} (
-                {ROLE_LABEL[d.uploaderRole] ?? d.uploaderRole}) {when(d.createdAt)}
-              </small>
-            </div>
-            {d.canDelete &&
-              (confirm === d.id ? (
-                <div className="row" style={{ gap: 6 }}>
-                  <button
-                    type="button"
-                    className="btn danger small"
-                    onClick={async () => {
-                      await api('DELETE', `/v1/documents/${d.id}`);
-                      setConfirm(null);
-                      reload();
-                    }}
-                  >
-                    Delete
-                  </button>
-                  <button type="button" className="btn ghost small" onClick={() => setConfirm(null)}>
-                    Keep
-                  </button>
-                </div>
-              ) : (
-                <button type="button" className="btn ghost small" onClick={() => setConfirm(d.id)}>
-                  Delete…
-                </button>
-              ))}
-          </header>
-          {d.note && <p style={{ margin: 0 }}>{d.note}</p>}
-          <div className="doc-files">
-            {d.files.map((f) => (
-              <Thumb key={f.id} docId={d.id} file={f} />
-            ))}
-          </div>
-          {(d.comments.length > 0 || d.canComment) && <Comments doc={d} onChange={reload} />}
-        </article>
+        <DocumentItem key={d.id} d={d} onChange={reload} />
       ))}
     </div>
   );

@@ -3,6 +3,7 @@ import { useAuth } from './auth';
 import Layout from './components/Layout';
 import { AdminOverview, AdminUsers, AdminVerification } from './pages/Admin';
 import { ForgotPasswordPage, LoginCodePage, LoginPage, RegisterCodePage, RegisterPage, ResetPasswordPage } from './pages/AuthPages';
+import DoctorsPage from './pages/Doctors';
 import LinksPage from './pages/LinksPage';
 import PatientHome from './pages/PatientHome';
 import { ClinicDoctors, PatientDetail, ProDashboard } from './pages/ProDashboard';
@@ -38,8 +39,9 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Home />} />
           <Route path="/links" element={user.role === 'admin' ? <Navigate to="/" /> : <LinksPage />} />
-          <Route path="/doctors" element={user.role === 'clinic' ? <ClinicDoctors /> : <Navigate to="/" />} />
+          <Route path="/doctors" element={user.role === 'clinic' ? <ClinicDoctors /> : user.role === 'patient' ? <DoctorsPage /> : <Navigate to="/" />} />
           <Route path="/patients/:patientId" element={user.role === 'doctor' || user.role === 'clinic' ? <PatientDetail /> : <Navigate to="/" />} />
+          <Route path="/devices" element={<Navigate to={user.role === 'admin' ? '/' : '/settings#devices'} replace />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/admin" element={user.role === 'admin' ? <AdminOverview /> : <Navigate to="/" />} />
           <Route path="/admin/verification" element={user.role === 'admin' ? <AdminVerification /> : <Navigate to="/" />} />

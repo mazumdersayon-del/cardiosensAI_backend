@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     future_skew_s: int = 5 * 60
     pre_registration_grace_s: int = 24 * 3600
     max_ecg_samples: int = 600_000  # 10 min at 1 kHz
+    # Test streams (../Test_Scripts/stream_device.py): synthetic data from a registered device, stored labelled "simulated".
+    # None = on in development/test, off in staging/production unless set to true.
+    device_test_streams: bool | None = None
 
     rate_limit_otp_per_phone: int = 5
     rate_limit_otp_per_ip: int = 30
@@ -84,6 +87,10 @@ class Settings(BaseSettings):
     @property
     def google_audiences(self) -> list[str]:
         return [a for a in (self.google_client_id, *self.google_extra_client_ids) if a]
+
+    @property
+    def test_streams_allowed(self) -> bool:
+        return self.env in ("development", "test") if self.device_test_streams is None else self.device_test_streams
 
     @property
     def secure_cookies(self) -> bool:

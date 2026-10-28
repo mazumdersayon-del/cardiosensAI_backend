@@ -10,7 +10,9 @@ FastAPI + PostgreSQL API (`/v1`) and a React SPA (`/`, staff portal at `/admin`)
 bash scripts/run_local.sh [--dev] [--reset]        # Docker PG :55433 + migrations + demo data + API :8000 (+ Vite :5173)
 bash scripts/run_local.sh totp                     # demo doctor/clinic TOTP code; demo password cardiosens-demo-2026
 bash scripts/run_local.sh ecg-live 120             # stream a synthetic 12-lead live ECG for the demo patient
-.venv/bin/pytest -q                     # 90 tests, SQLite; TEST_DATABASE_URL=postgresql+psycopg://... for PG
+python3 ../Test_Scripts/stream_device.py             # test stream (outside this repo): 12-lead + all Home readings (demo CS12-DEMO-P0001 / SN12L-P0001)
+bash scripts/run_local.sh mail --user ADDR && bash scripts/run_local.sh --lan   # real email (var/local.env, git-ignored) + reachable on the Wi-Fi
+.venv/bin/pytest -q                     # 99 tests, SQLite; TEST_DATABASE_URL=postgresql+psycopg://... for PG
 .venv/bin/ruff check . && .venv/bin/ruff format --check .   # line length 140
 cd web && npm test && npm run typecheck && npm run build    # build writes ../website (committed)
 .venv/bin/alembic revision --autogenerate -m "..."  && alembic check   # after model changes, against PG
@@ -29,7 +31,11 @@ Done = ruff clean + pytest green (ideally also on PG) + web typecheck/test/build
 - Audit events and logs never contain health values; logs use route templates, not URLs.
 - Admin portal (`/admin`, `api/v1/admin.py`): counts and account details only, never health values; every action audited; emails masked except an explicit, audited CSV export. Verify needs ≥ 1 licence file (`verification_files`, owner + staff only, signed links); reject/revoke need a reason (stored in `review_note`, emailed). Transitions: verified ← any other; rejected ← pending; revoked ← verified; resubmit → pending.
 - Deletion: admin delete = status `deleting` + `erase_after` (+30 d), sessions ended, data/links kept so Restore works; anything checking `status == "active"` already hides it. Erasure is one function, `services/erasure.erase_account` (self-delete, "erase now", daily `app/scripts/purge_deleted.py` timer). Admin accounts can't be deleted from the portal. New per-user tables must be added to `erase_account`.
+- Profile pictures (`/v1/me/avatar`): own account only, JPEG/PNG by content, ≤ 512 KB; storage key on `users.avatar_key`, deleted on replace and in `erase_account`. Web shows it as a `data:` URL (CSP `img-src 'self' data:`, no `blob:`).
+- Every web page ends with `components/SiteFooter.tsx` (cardiosens.ai links, absolute URLs, new tab); keep it in `Layout` and `AuthShell`. Header Account entry is the ☰ button.
+- Doctors list (`api/v1/doctors.py`): patients only; a doctor appears only when `professional_profiles.listed` (their choice) AND verified, active, TOTP on; never phone/email. Listing fields don't reset verification; registration fields do.
 - Documents: visible to the patient and doctor/clinic grants only (not family shares); type by content signature (PDF/JPEG only); only doctors comment; files via signed links. Live ECG: polling (no WebSocket), chunks idempotent on seq, `services/ecg.finalize` turns a session into a recording; high-frequency views log once per viewer (`ecg.live_view`, `dashboard.summary` hourly).
+- Devices (`api/v1/devices.py`, `api/v1/device_stream.py`): `devices.patient_id` is the **owner** (patient, doctor or clinic login); `device_uid` unique among active devices. Device streams authenticate by device ID + serial (constant-time) + owner ID, get a short device token, and re-check device active / owner / link on every call. Doctor/clinic devices write only to patients with an active grant (`can_view_patients` + `active_grant_for`). Stream data is synthetic → always `acquisition: simulated`, accepted only where `settings.test_streams_allowed` (off in staging/production unless `DEVICE_TEST_STREAMS=true`); the normal API still rejects simulated readings.
 - ECG samples are interleaved int16 frames in `leads` order; `sample_count` = frames.
 - Timestamps are UTC (`UTCDateTime` rejects naive datetimes). Measurement ingestion is idempotent on `(patient_id, client_id)`.
 - `install_website(app)` stays **last** in `create_app` so the static mount can't shadow API routes.

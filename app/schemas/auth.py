@@ -49,6 +49,7 @@ class UserOut(CamelModel):
     preferences: dict
     mfa_enabled: bool
     created_at: datetime
+    avatar_version: str | None = Field(default=None, description="Set when there is a profile picture (GET /v1/me/avatar); changes with it")
 
 
 class TokenOut(CamelModel):

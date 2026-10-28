@@ -122,6 +122,9 @@ def erase_account(
     if user.phone:
         user.phone = f"deleted:{user.id.hex[:12]}"
     user.email = user.full_name = user.emergency_contact = user.password_hash = None
+    if user.avatar_key:
+        keys.append(user.avatar_key)
+    user.avatar_key = user.avatar_updated_at = None
     user.date_of_birth = None
     user.mfa_secret = None
     user.mfa_enabled = False

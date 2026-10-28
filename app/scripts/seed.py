@@ -55,7 +55,22 @@ DEVICE_MODELS = [
         "integration": "ble_vendor",
         "regulatory_note": "In development. Not clinically validated or certified.",
     },
+    {
+        "code": "cardiosensai-12lead-dev",
+        "name": "CardiosensAI 12-lead monitor (development)",
+        "manufacturer": "CardiosensAI",
+        "kind": "monitor",
+        "capabilities": ["hr", "spo2", "bp", "resp", "temp", "glucose", "ecg"],
+        "integration": "cloud_api",
+        "regulatory_note": "In development. Not clinically validated or certified. Sends through the device stream.",
+    },
 ]
+
+# Demo 12-lead monitors for the device stream (../Test_Scripts/stream_device.py): device ID, serial, owner.
+DEMO_STREAM_DEVICES = (
+    ("CS12-DEMO-P0001", "SN12L-P0001", "patient"),
+    ("CS12-DEMO-D0001", "SN12L-D0001", "doctor"),
+)
 
 
 def seed_models(db: Session) -> dict[str, DeviceModel]:
@@ -135,6 +150,99 @@ def add_demo_12lead(db: Session, patient: User) -> None:
     print("Added the demo 12-lead ECG.")
 
 
+# Fictional doctors for the patients' Doctors list (listed, verified, two-step sign-in on). Phone, name, specialty, degrees,
+# years, languages, practice, city, about.
+DEMO_DOCTORS = (
+    (
+        "+919800000002",
+        "Dr. Meera Iyer (demo)",
+        "Cardiology",
+        "MBBS, MD (Medicine), DM (Cardiology)",
+        14,
+        "English, Hindi, Tamil",
+        "Demo Heart Clinic",
+        "Kolkata",
+        "Interventional cardiologist. Heart rhythm problems, heart failure and preventive cardiology.",
+    ),
+    (
+        "+919800000010",
+        "Dr. Arjun Sen (demo)",
+        "Electrophysiology",
+        "MBBS, MD, DM (Cardiology), Fellowship in EP",
+        11,
+        "English, Bengali, Hindi",
+        "Demo City Hospital",
+        "Kolkata",
+        "Treats palpitations and arrhythmias; reviews long ECG and wearable recordings.",
+    ),
+    (
+        "+919800000011",
+        "Dr. Kavya Nair (demo)",
+        "Internal Medicine",
+        "MBBS, MD (General Medicine)",
+        9,
+        "English, Malayalam, Hindi",
+        "Demo Family Health Centre",
+        "Kochi",
+        "Blood pressure, diabetes and long-term follow-up for adults.",
+    ),
+    (
+        "+919800000012",
+        "Dr. Rahul Verma (demo)",
+        "Pulmonology",
+        "MBBS, MD (Respiratory Medicine)",
+        12,
+        "English, Hindi",
+        "Demo Chest & Sleep Clinic",
+        "Delhi",
+        "Breathing problems, low oxygen levels and sleep apnoea.",
+    ),
+    (
+        "+919800000013",
+        "Dr. Sana Qureshi (demo)",
+        "Endocrinology",
+        "MBBS, MD, DM (Endocrinology)",
+        8,
+        "English, Hindi, Urdu",
+        "Demo Diabetes Care",
+        "Hyderabad",
+        "Diabetes, thyroid and hormone disorders; glucose monitoring.",
+    ),
+    (
+        "+919800000014",
+        "Dr. Vikram Rao (demo)",
+        "Cardiology",
+        "MBBS, MD (Medicine), DNB (Cardiology)",
+        20,
+        "English, Kannada, Hindi",
+        "Demo Heart Institute",
+        "Bengaluru",
+        "Coronary artery disease, chest pain clinic and cardiac rehabilitation.",
+    ),
+)
+
+
+def seed_demo_doctors(db: Session, meera: User) -> None:
+    now = utcnow()
+    for i, (phone, name, specialty, degrees, years, languages, practice, city, about) in enumerate(DEMO_DOCTORS):
+        doc = meera if phone == meera.phone else ensure_user(db, phone, "doctor", name)
+        if doc.mfa_secret is None:
+            doc.mfa_secret, doc.mfa_enabled = DEMO_TOTP_SECRET, True
+        prof = db.get(ProfessionalProfile, doc.id)
+        if prof is None:
+            prof = ProfessionalProfile(
+                user_id=doc.id,
+                registration_number=f"DEMO-{12345 + i}",
+                council="Demo Medical Council",
+                verification_status="verified",
+                verified_at=now,
+            )
+            db.add(prof)
+        if prof.degrees is None:  # fill once; a doctor's own edits are kept
+            prof.listed, prof.specialty, prof.degrees, prof.experience_years = True, specialty, degrees, years
+            prof.languages, prof.practice, prof.city, prof.about = languages, practice, city, about
+
+
 def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
     rnd = random.Random(4812)  # noqa: S311 - synthetic demo data, not security
     now = utcnow()
@@ -170,6 +278,22 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
                 verified_at=now,
             )
         )
+
+    db.flush()
+    seed_demo_doctors(db, doctor)
+    for uid, serial, who in DEMO_STREAM_DEVICES:
+        owner = patient if who == "patient" else doctor
+        if db.scalar(select(Device).where(Device.device_uid == uid)) is None:
+            db.add(
+                Device(
+                    patient_id=owner.id,
+                    model_id=models["cardiosensai-12lead-dev"].id,
+                    serial=serial,
+                    device_uid=uid,
+                    display_name="12-lead monitor (demo)",
+                    registered_at=now - timedelta(days=1),
+                )
+            )
 
     if db.scalar(select(Device).where(Device.patient_id == patient.id)) is not None:
         add_demo_12lead(db, patient)

@@ -8,11 +8,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.db import utcnow
+from app.core.ecg_leads import STANDARD_12
 from app.core.errors import bad_request
 from app.core.storage import get_storage
 from app.models import EcgLiveChunk, EcgLiveSession, EcgRecording
 
-STANDARD_12 = ("I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6")
 LIVE_STALLED_AFTER = timedelta(seconds=5)
 LIVE_ABANDONED_AFTER = timedelta(minutes=2)
 MAX_CHUNK_SECONDS = 10
@@ -70,7 +70,7 @@ def finalize(db: Session, s: EcgLiveSession, quality: str = "unknown") -> EcgRec
         average_hr=s.average_hr,
         poor_quality_segments=[],
         quality=quality,
-        acquisition="live",
+        acquisition=s.acquisition or "live",
         storage_key=key,
         sha256=hashlib.sha256(raw).hexdigest(),
     )

@@ -3,8 +3,9 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { api, ApiError, parseIdentifier, type LoginStarted, type MfaRequired, type SignupStarted } from '../api';
 import { useAuth } from '../auth';
 import GoogleButton, { credentialProfile } from '../components/GoogleButton';
-import { ThemeButton } from '../components/Layout';
+import { Tagline, ThemeButton } from '../components/Layout';
 import PhoneInput from '../components/PhoneInput';
+import SiteFooter from '../components/SiteFooter';
 import { Banner, errorText } from '../components/ui';
 
 function AuthShell({ title, children, sub }: { title: string; sub?: ReactNode; children: ReactNode }) {
@@ -14,6 +15,7 @@ function AuthShell({ title, children, sub }: { title: string; sub?: ReactNode; c
         <div className="card stack">
           <div className="logo">
             <img src="/logos/cardiosensai-logo.png" alt="CardiosensAI" />
+            <Tagline />
           </div>
           <div>
             <h1 style={{ textAlign: 'center' }}>{title}</h1>
@@ -21,11 +23,11 @@ function AuthShell({ title, children, sub }: { title: string; sub?: ReactNode; c
           </div>
           {children}
         </div>
-        <div className="row spread">
-          <small>Not a diagnostic service. No clinical interpretation is shown.</small>
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
           <ThemeButton className="btn ghost small" />
         </div>
       </div>
+      <SiteFooter />
     </div>
   );
 }

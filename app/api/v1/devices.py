@@ -1,4 +1,8 @@
-"""Device models (what each model is approved to measure) and the patient's registered devices."""
+"""Device models (what each model is approved to measure) and registered devices (Account → Devices).
+
+Patients register the devices that take their readings; doctors and clinics register their own equipment
+(e.g. a 12-lead monitor), which records for linked patients through the device stream (`device_stream.py`).
+"""
 
 import uuid
 
@@ -9,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RequestMeta, get_current_user, request_meta, require_patient
 from app.core.db import get_db, utcnow
-from app.core.errors import bad_request, conflict, not_found
+from app.core.errors import bad_request, conflict, forbidden, not_found
 from app.models import Device, DeviceModel, User
 from app.schemas.health import DeviceIn, DeviceModelOut, DeviceOut, DeviceStatusIn
 from app.services import audit
@@ -34,27 +38,47 @@ def _model_out(m: DeviceModel) -> DeviceModelOut:
     )
 
 
+def require_owner(user: User = Depends(get_current_user)) -> User:
+    """Patients, doctors and clinics own devices; staff accounts don't."""
+    if user.role not in ("patient", "doctor", "clinic"):
+        raise forbidden("Devices belong to patient, doctor and clinic accounts")
+    return user
+
+
+def _audit_patient(user: User):
+    return user.id if user.role == "patient" else None
+
+
 @router.get("/device-models", response_model=list[DeviceModelOut], summary="Supported device models and what each one measures")
 def list_models(_: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[DeviceModelOut]:
     return [_model_out(m) for m in db.scalars(select(DeviceModel).where(DeviceModel.active.is_(True)).order_by(DeviceModel.name))]
 
 
 @router.get("/devices", response_model=list[DeviceOut])
-def list_devices(user: User = Depends(require_patient), db: Session = Depends(get_db)) -> list[DeviceOut]:
+def list_devices(user: User = Depends(require_owner), db: Session = Depends(get_db)) -> list[DeviceOut]:
     rows = db.scalars(select(Device).where(Device.patient_id == user.id, Device.status == "active").order_by(Device.registered_at))
     return [device_out(d) for d in rows]
 
 
 @router.post("/devices", response_model=DeviceOut, status_code=201, summary="Register a device to my account (ownership)")
 def register_device(
-    body: DeviceIn, user: User = Depends(require_patient), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+    body: DeviceIn, user: User = Depends(require_owner), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
 ) -> DeviceOut:
     model = db.scalar(select(DeviceModel).where(DeviceModel.code == body.model_code, DeviceModel.active.is_(True)))
     if model is None:
         raise bad_request("unsupported_model", "This device model isn't supported")
     existing = db.scalar(select(Device).where(Device.model_id == model.id, Device.serial == body.serial, Device.status == "active"))
+    if body.device_uid:
+        same_uid = db.scalar(select(Device).where(Device.device_uid == body.device_uid, Device.status == "active"))
+        if same_uid is not None and same_uid is not existing:
+            if same_uid.patient_id == user.id:
+                raise conflict("device_uid_taken", "You already registered a device with this device ID but a different model or serial")
+            raise conflict("device_owned", "This device is registered to another account. Ask its owner to remove it, or contact support.")
+        if existing is not None and existing.device_uid and existing.device_uid != body.device_uid:
+            raise conflict("device_uid_mismatch", "This serial number is registered with a different device ID")
     if existing is not None:
         if existing.patient_id == user.id:
+            existing.device_uid = existing.device_uid or body.device_uid
             # Re-pairing the same device: refresh identifiers, keep history.
             existing.client_ref = body.client_ref or existing.client_ref
             existing.ble_identifier = body.ble_identifier or existing.ble_identifier
@@ -67,6 +91,7 @@ def register_device(
         patient_id=user.id,
         model_id=model.id,
         serial=body.serial,
+        device_uid=body.device_uid,
         client_ref=body.client_ref,
         display_name=body.display_name or model.name,
         ble_identifier=body.ble_identifier,
@@ -79,7 +104,14 @@ def register_device(
         db.rollback()
         raise conflict("device_conflict", "This device or app reference is already registered") from exc
     audit.record(
-        db, actor=user, action="device.register", patient_id=user.id, resource_type="device", resource_id=d.id, detail=model.name, meta=meta
+        db,
+        actor=user,
+        action="device.register",
+        patient_id=_audit_patient(user),
+        resource_type="device",
+        resource_id=d.id,
+        detail=model.name,
+        meta=meta,
     )
     db.commit()
     db.refresh(d)
@@ -127,12 +159,14 @@ def update_status(device_id: str, body: DeviceStatusIn, user: User = Depends(req
     return device_out(d)
 
 
-@router.delete("/devices/{device_id}", status_code=204, summary="Remove a device (its past readings are kept)")
+@router.delete("/devices/{device_id}", status_code=204, summary="Deregister a device (its past readings are kept)")
 def remove_device(
-    device_id: str, user: User = Depends(require_patient), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+    device_id: str, user: User = Depends(require_owner), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
 ) -> None:
     d = _own_device(db, user, device_id)
     d.status = "retired"
     d.retired_at = utcnow()
-    audit.record(db, actor=user, action="device.remove", patient_id=user.id, resource_type="device", resource_id=d.id, meta=meta)
+    audit.record(
+        db, actor=user, action="device.remove", patient_id=_audit_patient(user), resource_type="device", resource_id=d.id, meta=meta
+    )
     db.commit()

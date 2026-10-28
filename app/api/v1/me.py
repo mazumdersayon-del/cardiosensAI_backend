@@ -3,7 +3,8 @@
 import re
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -70,6 +71,59 @@ def update_me(body: UserUpdateIn, user: User = Depends(get_current_user), db: Se
     for field, value in data.items():
         setattr(user, field, value)
     db.commit()
+    return user_out(user)
+
+
+AVATAR_MAX_BYTES = 512 * 1024
+AVATAR_TYPES = {b"\xff\xd8\xff": ("image/jpeg", "jpg"), b"\x89PNG\r\n\x1a\n": ("image/png", "png")}
+
+
+@router.put("/avatar", response_model=UserOut, summary="Set or replace my profile picture (JPEG or PNG, at most 512 KB)")
+async def set_avatar(
+    file: UploadFile = File(description="JPEG or PNG; the web app sends a 320 px square"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    meta: RequestMeta = Depends(request_meta),
+) -> UserOut:
+    limiter.hit(f"avatar:{user.id}", 30, 3600)
+    data = await file.read(AVATAR_MAX_BYTES + 1)
+    if len(data) > AVATAR_MAX_BYTES:
+        raise bad_request("file_too_large", "The picture can be at most 512 KB")
+    kind = next((v for sig, v in AVATAR_TYPES.items() if data.startswith(sig)), None)  # by content, not by name
+    if kind is None:
+        raise bad_request("unsupported_file", "Use a JPEG or PNG picture")
+    storage = get_storage()
+    old = user.avatar_key
+    key = f"avatars/{user.id}/{uuid.uuid4()}.{kind[1]}"
+    storage.put(key, data, kind[0])
+    user.avatar_key = key
+    user.avatar_updated_at = utcnow()
+    audit.record(db, actor=user, action="account.avatar_set", resource_type="user", resource_id=user.id, meta=meta)
+    db.commit()
+    if old:
+        storage.delete(old)
+    return user_out(user)
+
+
+@router.get("/avatar", response_class=Response, summary="My profile picture")
+def get_avatar(user: User = Depends(get_current_user)) -> Response:
+    if not user.avatar_key:
+        raise not_found("Profile picture")
+    ctype = "image/png" if user.avatar_key.endswith(".png") else "image/jpeg"
+    return Response(get_storage().get(user.avatar_key), media_type=ctype, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@router.delete("/avatar", response_model=UserOut, summary="Remove my profile picture")
+def delete_avatar(
+    user: User = Depends(get_current_user), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+) -> UserOut:
+    old = user.avatar_key
+    user.avatar_key = user.avatar_updated_at = None
+    if old:
+        audit.record(db, actor=user, action="account.avatar_removed", resource_type="user", resource_id=user.id, meta=meta)
+    db.commit()
+    if old:
+        get_storage().delete(old)
     return user_out(user)
 
 

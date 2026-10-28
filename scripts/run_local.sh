@@ -11,6 +11,19 @@
 #   bash scripts/run_local.sh ecg-live [S]     stream a synthetic 12-lead live ECG for the demo patient for S seconds
 #                                       (default 120; 0 = until Ctrl+C) to a running API (PORT=8000 by default)
 #   bash scripts/run_local.sh stop             stop the local database container (data is kept)
+#   bash scripts/run_local.sh --lan            listen on this PC's network address too, so phones on the same Wi-Fi
+#                                       (and other PCs) can use it: http://<this PC's IP>:8000
+#   bash scripts/run_local.sh --show-codes     keep one-time codes on screen even when real email/SMS is set up
+#
+# Real email and SMS on this PC (like production; settings in var/local.env, git-ignored, mode 600):
+#   bash scripts/run_local.sh mail --user no-reply@cardiosens.ai [--test you@example.com]
+#                                       SMTP (Google Workspace app password, asked hidden); --host/--port/--tls/--from
+#                                       for other providers. Sends a test email
+#   bash scripts/run_local.sh sms --template ID [--test +91...]
+#                                       MSG91 (auth key asked hidden; needs DLT approval). Sends a test code
+#   bash scripts/run_local.sh mail-test ADDRESS | sms-test NUMBER | local-show | local-off
+# With real email set up, codes are no longer shown on the page or in the log: they arrive by email (and SMS with
+# MSG91). Without MSG91, SMS counts as down, exactly like production today: sign-up goes on with the email code.
 #
 # Needs: Docker, Node 20+ (for the web app). Python 3.13 comes from uv; if uv isn't installed, the
 # standalone uv binary is downloaded once into ./var/tools (git-ignored).
@@ -37,9 +50,121 @@ ADMIN_EMAIL=""
 DEMO_TOTP_SECRET=CARDIOSENSDEMOTOTPSECRETCODE2345
 TOOLS="$ROOT/var/tools"
 VENV="$ROOT/.venv"
+LOCAL_ENV="$ROOT/var/local.env"
+LAN=0
+SHOW_CODES=0
 
 log() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33mWARNING: %s\033[0m\n' "$*" >&2; }
 die() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- var/local.env (real email / SMS on this PC)
+kv_get() { [[ -f $LOCAL_ENV ]] && sed -n "s/^$1=//p" "$LOCAL_ENV" | tail -n1 || true; }
+kv_set() {
+  local tmp
+  mkdir -p "$ROOT/var"
+  [[ -f $LOCAL_ENV ]] || install -m 0600 /dev/null "$LOCAL_ENV"
+  tmp=$(mktemp)
+  grep -v "^$1=" "$LOCAL_ENV" >"$tmp" || true
+  printf '%s=%s\n' "$1" "$2" >>"$tmp"
+  cat "$tmp" >"$LOCAL_ENV" # keeps mode 600
+  rm -f "$tmp"
+}
+kv_del() { [[ -f $LOCAL_ENV ]] || return 0; local tmp; tmp=$(mktemp); grep -v "^$1" "$LOCAL_ENV" >"$tmp" || true; cat "$tmp" >"$LOCAL_ENV"; rm -f "$tmp"; }
+load_local_env() { # KEY=value lines, values taken literally (spaces, <, quotes allowed)
+  local line
+  [[ -f $LOCAL_ENV ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[A-Z][A-Z0-9_]*= ]] && export "${line?}"
+  done <"$LOCAL_ENV"
+}
+mask() { [[ -z $1 ]] && echo "(not set)" || echo "${1:0:4}…${1: -4} (${#1} characters)"; }
+is_email() { [[ $1 =~ ^[^@[:space:]\<\>]+@[^@[:space:]\<\>]+\.[^@[:space:]\<\>]+$ ]]; }
+local_run() { # run an app module with the local settings (needs the venv)
+  [[ -x $VENV/bin/python ]] || die "Run bash scripts/run_local.sh once first (it creates .venv)"
+  (load_local_env; ENV=development PYTHONDONTWRITEBYTECODE=1 "$VENV/bin/python" -m "$@")
+}
+
+case "${1:-}" in
+  mail)
+    shift
+    M_USER="" M_FROM="" M_HOST=smtp.gmail.com M_PORT="" M_TLS=starttls M_TEST=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --user) M_USER=${2?}; shift 2 ;;
+        --from) M_FROM=${2?}; shift 2 ;;
+        --host) M_HOST=${2?}; shift 2 ;;
+        --port) M_PORT=${2?}; shift 2 ;;
+        --tls) M_TLS=${2?}; shift 2 ;;
+        --test) M_TEST=${2?}; shift 2 ;;
+        *) die "Unknown mail option: $1 (see --help)" ;;
+      esac
+    done
+    is_email "$M_USER" || die "Give the SMTP login: bash scripts/run_local.sh mail --user no-reply@cardiosens.ai"
+    [[ $M_TLS =~ ^(starttls|ssl|none)$ ]] || die "--tls must be starttls, ssl or none"
+    [[ -n $M_PORT ]] || { [[ $M_TLS == ssl ]] && M_PORT=465 || M_PORT=587; }
+    M_FROM=${M_FROM:-$M_USER}
+    [[ $M_FROM == *"<"* ]] || M_FROM="CardiosensAI <$M_FROM>"
+    PASSWORD=${SMTP_PASSWORD:-}
+    if [[ -z $PASSWORD ]]; then
+      [[ -t 0 ]] || die "No terminal to ask for the password; set SMTP_PASSWORD in the environment instead"
+      read -rsp "SMTP password for $M_USER (hidden; Google: the 16-letter app password): " PASSWORD
+      echo
+    fi
+    [[ $M_HOST == smtp.gmail.com ]] && PASSWORD=${PASSWORD// /}
+    [[ -n $PASSWORD ]] || die "Empty password"
+    kv_set EMAIL_PROVIDER smtp
+    kv_set EMAIL_FROM "$M_FROM"
+    kv_set SMTP_HOST "$M_HOST"
+    kv_set SMTP_PORT "$M_PORT"
+    kv_set SMTP_TLS "$M_TLS"
+    kv_set SMTP_USERNAME "$M_USER"
+    kv_set SMTP_PASSWORD "$PASSWORD"
+    echo "Saved in $LOCAL_ENV (password not shown)."
+    log "Sending a test email to ${M_TEST:-$M_USER}"
+    local_run app.scripts.test_email "${M_TEST:-$M_USER}" || die "The test email failed (reason above)"
+    echo "Sent. Restart run_local.sh to use it."
+    exit 0
+    ;;
+  sms)
+    shift
+    S_TEMPLATE="" S_TEST=""
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --template) S_TEMPLATE=${2?}; shift 2 ;;
+        --test) S_TEST=${2?}; shift 2 ;;
+        *) die "Unknown sms option: $1 (see --help)" ;;
+      esac
+    done
+    S_TEMPLATE=${S_TEMPLATE:-$(kv_get MSG91_OTP_TEMPLATE_ID)}
+    [[ -n $S_TEMPLATE ]] || die "Give the MSG91 OTP template id: bash scripts/run_local.sh sms --template ID"
+    KEY=${MSG91_AUTH_KEY:-}
+    if [[ -z $KEY ]]; then
+      [[ -t 0 ]] || die "No terminal to ask for the auth key; set MSG91_AUTH_KEY in the environment instead"
+      read -rsp "MSG91 auth key (hidden): " KEY
+      echo
+    fi
+    [[ $KEY =~ ^[A-Za-z0-9]{16,64}$ ]] || die "That doesn't look like an MSG91 auth key"
+    kv_set SMS_PROVIDER msg91
+    kv_set MSG91_AUTH_KEY "$KEY"
+    kv_set MSG91_OTP_TEMPLATE_ID "$S_TEMPLATE"
+    echo "Saved in $LOCAL_ENV (auth key not shown)."
+    if [[ -n $S_TEST ]]; then
+      log "Sending a test code to $S_TEST"
+      local_run app.scripts.test_sms "$S_TEST" || die "The test SMS failed (MSG91's reason is above)"
+    fi
+    exit 0
+    ;;
+  mail-test) local_run app.scripts.test_email "${2?Give an email address}"; exit $? ;;
+  sms-test) local_run app.scripts.test_sms "${2?Give a number, e.g. +919812345678}"; exit $? ;;
+  local-show)
+    echo "File: $LOCAL_ENV"
+    echo "EMAIL_PROVIDER=$(kv_get EMAIL_PROVIDER)  SMTP $(kv_get SMTP_USERNAME) @ $(kv_get SMTP_HOST):$(kv_get SMTP_PORT)  password $(mask "$(kv_get SMTP_PASSWORD)")"
+    echo "SMS_PROVIDER=$(kv_get SMS_PROVIDER)  MSG91 template $(kv_get MSG91_OTP_TEMPLATE_ID)  key $(mask "$(kv_get MSG91_AUTH_KEY)")"
+    exit 0
+    ;;
+  local-off) rm -f "$LOCAL_ENV"; echo "Removed $LOCAL_ENV: back to codes on screen and emails in the log."; exit 0 ;;
+esac
 
 case "${1:-}" in
   stop)
@@ -64,6 +189,8 @@ while [[ $# -gt 0 ]]; do
     --no-demo) DEMO=0; shift ;;
     --admin-email) ADMIN_EMAIL=${2?}; shift 2 ;;
     --port) PORT=${2?}; shift 2 ;;
+    --lan) LAN=1; shift ;;
+    --show-codes) SHOW_CODES=1; shift ;;
     -h | --help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown option: $1 (see --help)" ;;
   esac
@@ -124,13 +251,32 @@ if [[ ! -f $STAMP || $(cat "$STAMP") != "$REQ_SHA" ]]; then
 fi
 
 # ---------------------------------------------------------------- settings (development only)
+HOST_IP=127.0.0.1
+PUBLIC_HOST=localhost
+if [[ $LAN -eq 1 ]]; then
+  HOST_IP=0.0.0.0
+  PUBLIC_HOST=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+  [[ -n $PUBLIC_HOST ]] || PUBLIC_HOST=$(hostname -I | awk '{print $1}')
+  [[ -n $PUBLIC_HOST ]] || die "Couldn't find this PC's network address"
+fi
 export ENV=development
 export DATABASE_URL="postgresql+psycopg://cardiosens:cardiosens@127.0.0.1:$PG_PORT/cardiosens"
-export API_BASE_URL="http://localhost:$PORT"
-export WEB_BASE_URL="http://localhost:$([[ $DEV -eq 1 ]] && echo 5173 || echo "$PORT")"
+export API_BASE_URL="http://$PUBLIC_HOST:$PORT"
+export WEB_BASE_URL="http://$PUBLIC_HOST:$([[ $DEV -eq 1 ]] && echo 5173 || echo "$PORT")"
 export DEV_EXPOSE_OTP=true
 export SMS_PROVIDER=console
 export EMAIL_PROVIDER=console
+REAL_MAIL=0
+if [[ -f $LOCAL_ENV ]]; then
+  load_local_env
+  if [[ $EMAIL_PROVIDER == smtp ]]; then
+    REAL_MAIL=1
+    if [[ $SHOW_CODES -eq 0 ]]; then
+      export DEV_EXPOSE_OTP=false
+      [[ $SMS_PROVIDER == msg91 ]] || export SMS_PROVIDER=none # like production without MSG91: sign-up uses the email code
+    fi
+  fi
+fi
 export STORAGE_BACKEND=local
 export STORAGE_LOCAL_PATH="$ROOT/var/storage"
 export CORS_ORIGINS='[]'
@@ -168,19 +314,26 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [[ $DEV -eq 1 ]]; then
-  (cd web && exec ./node_modules/.bin/vite --port 5173 --strictPort --clearScreen false) &
+  (cd web && exec ./node_modules/.bin/vite --port 5173 --strictPort --clearScreen false $([[ $LAN -eq 1 ]] && echo --host)) &
   PIDS+=($!)
 fi
 
+if [[ $REAL_MAIL -eq 1 ]]; then
+  MODE="Real email via $SMTP_HOST ($SMTP_USERNAME); SMS: $SMS_PROVIDER; codes on screen: $DEV_EXPOSE_OTP"
+else
+  MODE="Emails and codes are printed below and shown on the pages (no real email; set up: bash scripts/run_local.sh mail --user ...)"
+fi
 cat <<EOF
 
   Web app:  $WEB_BASE_URL
   API docs: http://localhost:$PORT/docs
   Sign in:  patient@demo.cardiosens.ai / doctor@demo.cardiosens.ai / clinic@demo.cardiosens.ai
             password cardiosens-demo-2026; doctor & clinic code: bash scripts/run_local.sh totp
-  Emails (confirmation / reset links) are printed below. Ctrl+C to stop.
+  Mode:     $MODE
+$([[ $LAN -eq 1 ]] && printf '  Phone:    same Wi-Fi, open %s ; Android app: CS_API_BASE_URL=%s npx expo start\n' "$WEB_BASE_URL" "$API_BASE_URL")
+  Ctrl+C to stop.
 
 EOF
-"$VENV/bin/uvicorn" app.main:app --host 127.0.0.1 --port "$PORT" --reload --reload-dir app &
+"$VENV/bin/uvicorn" app.main:app --host "$HOST_IP" --port "$PORT" --reload --reload-dir app &
 PIDS+=($!)
 wait "${PIDS[@]}"

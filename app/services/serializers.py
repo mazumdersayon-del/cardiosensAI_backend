@@ -27,12 +27,14 @@ def user_out(u: User) -> UserOut:
         preferences=u.preferences or {},
         mfa_enabled=u.mfa_enabled,
         created_at=u.created_at,
+        avatar_version=str(int(u.avatar_updated_at.timestamp())) if u.avatar_key and u.avatar_updated_at else None,
     )
 
 
 def device_out(d: Device) -> DeviceOut:
     return DeviceOut(
         id=str(d.id),
+        device_uid=d.device_uid,
         model_code=d.model.code,
         model_name=d.model.name,
         kind=d.model.kind,

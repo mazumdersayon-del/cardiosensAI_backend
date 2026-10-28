@@ -1,31 +1,35 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth, useTheme } from '../auth';
 import { formatId, ROLE_LABEL } from '../format';
+import Avatar from './Avatar';
+import SiteFooter from './SiteFooter';
 
 const NAV: Record<string, { to: string; label: string }[]> = {
   patient: [
     { to: '/', label: 'Home' },
+    { to: '/doctors', label: 'Doctors' },
     { to: '/links', label: 'Care team' },
-    { to: '/settings', label: 'Account' },
   ],
   doctor: [
     { to: '/', label: 'Patients' },
     { to: '/links', label: 'Links' },
-    { to: '/settings', label: 'Account' },
   ],
   clinic: [
     { to: '/', label: 'Patients' },
     { to: '/doctors', label: 'Doctors' },
     { to: '/links', label: 'Links' },
-    { to: '/settings', label: 'Account' },
   ],
   admin: [
     { to: '/admin', label: 'Overview' },
     { to: '/admin/verification', label: 'Verification' },
     { to: '/admin/users', label: 'Users' },
-    { to: '/settings', label: 'Account' },
   ],
 };
+
+/** The brand line under every CardiosensAI logo. */
+export function Tagline() {
+  return <span className="tagline">Real Time · Real Hope</span>;
+}
 
 export function ThemeButton({ className = 'icon-btn' }: { className?: string }) {
   const [, toggle] = useTheme();
@@ -49,6 +53,7 @@ export default function Layout() {
         <div className="topbar-inner">
           <NavLink to="/" className="brand">
             <img src="/logos/cardiosensai-logo.png" alt="CardiosensAI home" />
+            <Tagline />
           </NavLink>
           <nav className="topnav" aria-label="Main">
             {NAV[user.role].map((n) => (
@@ -63,6 +68,12 @@ export default function Layout() {
               {ROLE_LABEL[user.role]} · {formatId(user.uniqueId)}
             </div>
           </div>
+          <Avatar user={user} size={36} />
+          <NavLink to="/settings" className="icon-btn account-link" aria-label="Account" title="Account">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </NavLink>
           <ThemeButton />
           <button
             type="button"
@@ -79,6 +90,7 @@ export default function Layout() {
       <main className="page">
         <Outlet />
       </main>
+      <SiteFooter />
     </>
   );
 }

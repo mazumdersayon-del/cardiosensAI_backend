@@ -27,6 +27,13 @@ class DeviceModelOut(CamelModel):
 class DeviceIn(CamelModel):
     model_code: str = Field(max_length=64)
     serial: str = Field(min_length=1, max_length=64)
+    device_uid: str | None = Field(
+        default=None,
+        min_length=6,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:\-]*$",
+        description="The device's own unique id (Account → Devices)",
+    )
     display_name: str | None = Field(default=None, max_length=80)
     client_ref: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_.:\-]+$")
     ble_identifier: str | None = Field(default=None, max_length=64)
@@ -35,6 +42,7 @@ class DeviceIn(CamelModel):
 
 class DeviceOut(CamelModel):
     id: str
+    device_uid: str | None = None
     model_code: str
     model_name: str
     kind: str

@@ -3,7 +3,14 @@ import { api, type Report } from '../api';
 import { day, VITALS, when } from '../format';
 import { Banner, errorText, StatusPill, useLoad } from './ui';
 
-export default function ReportsPanel({ patientId }: { patientId: string }) {
+/** Opens a ready report through a short-lived signed link. */
+export async function downloadReport(r: Report): Promise<void> {
+  const { url } = await api<{ url: string }>('POST', `/v1/reports/${r.id}/download-link`);
+  window.location.assign(url);
+}
+
+/** Create a PDF report for a period and list past ones. `showList={false}`: only the form (patient home, whose History card lists them). */
+export default function ReportsPanel({ patientId, showList = true, onCreated }: { patientId: string; showList?: boolean; onCreated?: () => void }) {
   const [list, err, reload] = useLoad(() => api<Report[]>('GET', `/v1/reports?patientId=${patientId}`), [patientId]);
   const today = new Date().toISOString().slice(0, 10);
   const monthAgo = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
@@ -24,9 +31,13 @@ export default function ReportsPanel({ patientId }: { patientId: string }) {
         includeEcg: true,
         utcOffsetMin: -new Date().getTimezoneOffset(),
       });
-      setMsg({ kind: 'ok', text: 'Report requested. It appears below when it is ready (usually under a minute).' });
+      setMsg({ kind: 'ok', text: showList ? 'Report requested. It appears below when it is ready (usually under a minute).' : 'Report requested. It appears in History when it is ready (usually under a minute).' });
       reload();
-      setTimeout(reload, 4000);
+      onCreated?.();
+      setTimeout(() => {
+        reload();
+        onCreated?.();
+      }, 4000);
     } catch (e) {
       setMsg({ kind: 'error', text: errorText(e) });
     } finally {
@@ -36,8 +47,7 @@ export default function ReportsPanel({ patientId }: { patientId: string }) {
 
   async function download(r: Report) {
     try {
-      const { url } = await api<{ url: string }>('POST', `/v1/reports/${r.id}/download-link`);
-      window.location.assign(url);
+      await downloadReport(r);
     } catch (e) {
       setMsg({ kind: 'error', text: errorText(e) });
     }
@@ -60,8 +70,8 @@ export default function ReportsPanel({ patientId }: { patientId: string }) {
       </div>
       {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
       {err && <p className="muted">{err}</p>}
-      {list && !list.length && <div className="empty">No reports yet.</div>}
-      {list && list.length > 0 && (
+      {showList && list && !list.length && <div className="empty">No reports yet.</div>}
+      {showList && list && list.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
