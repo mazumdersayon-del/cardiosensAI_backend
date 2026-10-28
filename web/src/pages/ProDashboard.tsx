@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, type ClinicDoctor, type LatestValue, type LinkedPatient } from '../api';
 import { useAuth } from '../auth';
 import DocumentsPanel from '../components/Documents';
-import EcgPanel, { LiveEcg } from '../components/Ecg';
+import { EcgCards } from '../components/EcgCards';
 import IdCard from '../components/IdCard';
 import { LinkRequestBox, useLinks } from '../components/Links';
 import ReportsPanel from '../components/Reports';
@@ -140,8 +140,6 @@ export function PatientDetail() {
   const { patientId = '' } = useParams();
   const [patients] = useLoad(() => api<LinkedPatient[]>('GET', '/v1/linked-patients'), []);
   const [showHistory, setShowHistory] = useState(false);
-  const [ecgKey, setEcgKey] = useState(0);
-  const onSaved = useCallback(() => setEcgKey((k) => k + 1), []);
   const p = patients?.find((x) => x.patientId === patientId);
   return (
     <div className="grid">
@@ -157,17 +155,10 @@ export function PatientDetail() {
         </div>
         <span className="pill info">Every view is logged in the patient’s access log</span>
       </div>
-      <section className="card span-12">
-        <h2>Live ECG</h2>
-        <LiveEcg patientId={patientId} onSaved={onSaved} />
-      </section>
+      <EcgCards patientId={patientId} />
       <section className="card span-12">
         <h2>Latest readings</h2>
         <LatestVitals patientId={patientId} />
-      </section>
-      <section className="card span-12">
-        <h2>ECG recordings</h2>
-        <EcgPanel patientId={patientId} reloadKey={ecgKey} openLatest />
       </section>
       <section className="card span-12">
         <h2>Reports and documents</h2>

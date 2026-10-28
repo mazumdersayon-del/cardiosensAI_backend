@@ -132,7 +132,8 @@ export function EcgView({ tr, t0 = 0, seconds = 10, label }: { tr: Trace; t0?: n
   );
 }
 
-function RecordingView({ rec }: { rec: EcgRecording }) {
+/** One stored recording on ECG paper, 10 s per page. */
+export function RecordingView({ rec }: { rec: EcgRecording }) {
   const [data, err] = useLoad(async () => new Int16Array((await apiBinary(`/v1/ecg-recordings/${rec.id}/samples`)).data), [rec.id]);
   const [page, setPage] = useState(0);
   if (err) return <p className="muted">{err}</p>;
@@ -161,55 +162,6 @@ function RecordingView({ rec }: { rec: EcgRecording }) {
         )}
       </div>
       <EcgView tr={tr} t0={page * 10} label={`ECG recorded ${when(rec.startedAt)}`} />
-    </div>
-  );
-}
-
-/** Recordings list with a viewer. `openLatest` shows the newest recording straight away. */
-export default function EcgPanel({ patientId, reloadKey = 0, openLatest = false, openId }: { patientId: string; reloadKey?: number; openLatest?: boolean; openId?: string }) {
-  const [list, err] = useLoad(() => api<EcgRecording[]>('GET', `/v1/patients/${patientId}/ecg-recordings?limit=20`), [patientId, reloadKey]);
-  const [open, setOpen] = useState<string | null>(openId ?? null);
-  useEffect(() => {
-    if (openLatest && !openId && list?.length) setOpen(list[0].id);
-  }, [list, openLatest, openId]);
-  if (err) return <p className="muted">{err}</p>;
-  if (!list) return <p className="muted">Loading…</p>;
-  if (!list.length) return <div className="empty">No ECG recordings yet.</div>;
-  const current = list.find((r) => r.id === open);
-  return (
-    <div className="stack">
-      {current && <RecordingView rec={current} />}
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Recorded</th>
-              <th>Leads</th>
-              <th>Length</th>
-              <th>Avg HR</th>
-              <th>Source</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((r) => (
-              <tr key={r.id} aria-selected={r.id === open}>
-                <td>{when(r.startedAt)}</td>
-                <td>{r.leads.length === 12 ? <span className="pill info">12-lead</span> : r.lead}</td>
-                <td>{r.durationS.toFixed(0)} s</td>
-                <td>{r.averageHr ?? '—'}</td>
-                <td>{r.acquisition === 'live' ? 'Live' : r.acquisition}</td>
-                <td>
-                  <button type="button" className="btn ghost small" onClick={() => setOpen(r.id === open ? null : r.id)}>
-                    {r.id === open ? 'Hide' : 'View'}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <small>Raw signal on standard ECG paper (25 mm/s, 10 mm/mV, 1 mV calibration pulse).</small>
     </div>
   );
 }
@@ -307,7 +259,7 @@ export function LiveEcg({ patientId, onSaved, hideWhenIdle = false, idle }: { pa
       <div className="stack" style={{ gap: 10 }}>
         <div className="row" style={{ gap: 10 }}>
           <span className="pill none">● Not recording</span>
-          <span className="muted">{last ? `Last ECG ${ago(last.startedAt)} (${last.leads.length === 12 ? '12-lead' : last.lead}, ${last.durationS.toFixed(0)} s)` : 'No ECG recorded yet'}</span>
+          {!idle && <span className="muted">{last ? `Last ECG ${ago(last.startedAt)} (${last.leads.length === 12 ? '12-lead' : last.lead}, ${last.durationS.toFixed(0)} s)` : 'No ECG recorded yet'}</span>}
         </div>
         {idle}
       </div>
@@ -327,99 +279,9 @@ export function LiveEcg({ patientId, onSaved, hideWhenIdle = false, idle }: { pa
           {live.leads.length === 12 ? '12-lead' : `${live.leads.length}-lead`} · {duration(live.durationS)}
           {live.averageHr ? ` · ${live.averageHr} bpm` : ''}
         </strong>
-        <span className="muted">Started {when(live.startedAt)}. Saved as a recording when it stops.</span>
+        <span className="muted">Started {when(live.startedAt)}. Saved when it stops.</span>
       </div>
       {trace && trace.data.length > 0 ? <EcgView tr={trace} t0={t0} label="Live ECG, last 10 seconds" /> : <p className="muted">Waiting for data…</p>}
     </div>
   );
 }
-
-// ---------------------------------------------------------------- patient home cards
-
-/** Live ECG card while nothing is streaming: the newest saved recording on ECG paper. */
-export function LatestRecording({ patientId, reloadKey = 0 }: { patientId: string; reloadKey?: number }) {
-  const [list] = useLoad(() => api<EcgRecording[]>('GET', `/v1/patients/${patientId}/ecg-recordings?limit=1`), [patientId, reloadKey]);
-  if (!list?.length) return null;
-  return <RecordingView rec={list[0]} />;
-}
-
-/**
- * ECG recordings card: the newest recordings in a short list. Clicking the card (or a recording) opens the full
- * viewer in a dialog; clicking outside it or pressing Esc goes back to the home page.
- */
-export function EcgRecordingsCard({ patientId, reloadKey = 0 }: { patientId: string; reloadKey?: number }) {
-  const [list, err] = useLoad(() => api<EcgRecording[]>('GET', `/v1/patients/${patientId}/ecg-recordings?limit=20`), [patientId, reloadKey]);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [shown, setShown] = useState(false);
-  const show = (id?: string) => {
-    setOpenId(id ?? list?.[0]?.id ?? null);
-    setShown(true);
-    dialog.current?.showModal();
-  };
-  return (
-    <>
-      {/* the whole card enlarges on click; keyboard users get the buttons inside */}
-      <div className="ecg-card-body" onClick={() => show()}>
-        {err && <p className="muted">{err}</p>}
-        {!list && !err && <p className="muted">Loading…</p>}
-        {list && !list.length && <div className="empty">No ECG recordings yet.</div>}
-        {list && list.length > 0 && (
-          <ul className="ecg-mini">
-            {list.slice(0, 6).map((r) => (
-              <li key={r.id}>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    show(r.id);
-                  }}
-                >
-                  <span>{when(r.startedAt)}</span>
-                  <small className="muted">
-                    {r.leads.length === 12 ? '12-lead' : r.lead} · {r.durationS.toFixed(0)} s{r.averageHr ? ` · ${r.averageHr} bpm` : ''}
-                  </small>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {list && list.length > 0 && (
-          <div className="row spread">
-            <small className="muted">{list.length > 6 ? `${list.length - 6} more` : 'Click a recording to enlarge it'}</small>
-            <button
-              type="button"
-              className="btn ghost small"
-              onClick={(e) => {
-                e.stopPropagation();
-                show();
-              }}
-            >
-              Enlarge
-            </button>
-          </div>
-        )}
-      </div>
-      <dialog
-        ref={dialog}
-        className="ecg-dialog"
-        aria-label="ECG recordings"
-        onClose={() => setShown(false)}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) e.currentTarget.close(); // a click on the backdrop, outside the box
-        }}
-      >
-        <div className="ecg-dialog-box">
-          <div className="row spread">
-            <h2 style={{ margin: 0 }}>ECG recordings</h2>
-            <button type="button" className="btn ghost small" onClick={() => dialog.current?.close()}>
-              Close
-            </button>
-          </div>
-          {shown && <EcgPanel key={openId ?? 'none'} patientId={patientId} reloadKey={reloadKey} openId={openId ?? undefined} />}
-        </div>
-      </dialog>
-    </>
-  );
-}
-

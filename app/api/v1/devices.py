@@ -1,10 +1,15 @@
-"""Device models (what each model is approved to measure) and registered devices (Account → Devices).
+"""Device models (what each model is approved to measure) and devices (Account → Devices).
 
-Patients register the devices that take their readings; doctors and clinics register their own equipment
-(e.g. a 12-lead monitor), which records for linked patients through the device stream (`device_stream.py`).
+Two kinds of device:
+- Bluetooth devices the mobile app pairs and uploads for (patients; `POST /devices` with the app's `clientRef`).
+- CardiosensAI devices connected over the internet (MQTT, docs/device-protocol.md): patients, doctors and clinics
+  pair one by device ID + serial number, confirmed by pressing the device's button (`POST /devices/pair`), then set
+  its snapshot schedule. A doctor's or clinic's device records for the linked patient it is assigned to. Linked
+  doctors and clinics can also change the schedule of a patient's device and ask it for a live ECG.
 """
 
 import uuid
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -14,9 +19,12 @@ from sqlalchemy.orm import Session
 from app.api.deps import RequestMeta, get_current_user, request_meta, require_patient
 from app.core.db import get_db, utcnow
 from app.core.errors import bad_request, conflict, forbidden, not_found
-from app.models import Device, DeviceModel, User
-from app.schemas.health import DeviceIn, DeviceModelOut, DeviceOut, DeviceStatusIn
-from app.services import audit
+from app.core.ratelimit import limiter
+from app.models import Device, DeviceConfig, DeviceModel, DevicePairing, FactoryDevice, User
+from app.schemas.fleet import DeviceConfigIn, LiveIn, PairIn, PairingOut
+from app.schemas.health import DeviceConfigOut, DeviceIn, DeviceModelOut, DeviceOut, DeviceStatusIn
+from app.services import audit, device_hub
+from app.services.authz import get_access, resolve_patient_id
 from app.services.notifications import notify_patient_and_watchers
 from app.services.serializers import device_out
 
@@ -57,28 +65,21 @@ def list_models(_: User = Depends(get_current_user), db: Session = Depends(get_d
 @router.get("/devices", response_model=list[DeviceOut])
 def list_devices(user: User = Depends(require_owner), db: Session = Depends(get_db)) -> list[DeviceOut]:
     rows = db.scalars(select(Device).where(Device.patient_id == user.id, Device.status == "active").order_by(Device.registered_at))
-    return [device_out(d) for d in rows]
+    return [full_device_out(db, d, user) for d in rows]
 
 
-@router.post("/devices", response_model=DeviceOut, status_code=201, summary="Register a device to my account (ownership)")
+@router.post("/devices", response_model=DeviceOut, status_code=201, summary="Register a Bluetooth device to my account (mobile app)")
 def register_device(
-    body: DeviceIn, user: User = Depends(require_owner), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+    body: DeviceIn, user: User = Depends(require_patient), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
 ) -> DeviceOut:
     model = db.scalar(select(DeviceModel).where(DeviceModel.code == body.model_code, DeviceModel.active.is_(True)))
     if model is None:
         raise bad_request("unsupported_model", "This device model isn't supported")
+    if model.integration == "mqtt":
+        raise bad_request("pair_instead", "CardiosensAI devices are added with their device ID and serial number (Account → Devices)")
     existing = db.scalar(select(Device).where(Device.model_id == model.id, Device.serial == body.serial, Device.status == "active"))
-    if body.device_uid:
-        same_uid = db.scalar(select(Device).where(Device.device_uid == body.device_uid, Device.status == "active"))
-        if same_uid is not None and same_uid is not existing:
-            if same_uid.patient_id == user.id:
-                raise conflict("device_uid_taken", "You already registered a device with this device ID but a different model or serial")
-            raise conflict("device_owned", "This device is registered to another account. Ask its owner to remove it, or contact support.")
-        if existing is not None and existing.device_uid and existing.device_uid != body.device_uid:
-            raise conflict("device_uid_mismatch", "This serial number is registered with a different device ID")
     if existing is not None:
         if existing.patient_id == user.id:
-            existing.device_uid = existing.device_uid or body.device_uid
             # Re-pairing the same device: refresh identifiers, keep history.
             existing.client_ref = body.client_ref or existing.client_ref
             existing.ble_identifier = body.ble_identifier or existing.ble_identifier
@@ -91,7 +92,6 @@ def register_device(
         patient_id=user.id,
         model_id=model.id,
         serial=body.serial,
-        device_uid=body.device_uid,
         client_ref=body.client_ref,
         display_name=body.display_name or model.name,
         ble_identifier=body.ble_identifier,
@@ -164,9 +164,180 @@ def remove_device(
     device_id: str, user: User = Depends(require_owner), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
 ) -> None:
     d = _own_device(db, user, device_id)
-    d.status = "retired"
-    d.retired_at = utcnow()
+    if d.factory_device_id is not None:
+        device_hub.unpair(db, d, actor=user, why="removed by owner")
+    else:
+        d.status = "retired"
+        d.retired_at = utcnow()
+        audit.record(
+            db, actor=user, action="device.remove", patient_id=_audit_patient(user), resource_type="device", resource_id=d.id, meta=meta
+        )
+    db.commit()
+
+
+# ---------------------------------------------------------------- CardiosensAI devices (MQTT)
+
+ONLINE_WITHIN = timedelta(minutes=10)
+
+
+def full_device_out(db: Session, d: Device, viewer: User) -> DeviceOut:
+    out = device_out(d)
+    if d.factory_device_id is None:
+        return out
+    fd = db.get(FactoryDevice, d.factory_device_id)
+    cfg = db.get(DeviceConfig, d.id)
+    out.connected = True
+    out.online = bool(fd and fd.last_seen_at and fd.last_seen_at > utcnow() - ONLINE_WITHIN)
+    if cfg is not None:
+        patient = device_hub.recording_patient(db, d, cfg)
+        assigned = db.get(User, cfg.assigned_patient_id) if cfg.assigned_patient_id else None
+        owner_is_pro = viewer.id == d.patient_id and viewer.role in ("doctor", "clinic")
+        out.config = DeviceConfigOut(
+            interval_min=cfg.interval_min,
+            intervals=list(device_hub.INTERVALS),
+            quiet_start=cfg.quiet_start,
+            quiet_end=cfg.quiet_end,
+            timezone=cfg.timezone,
+            paired_at=cfg.paired_at,
+            assigned_patient_id=str(assigned.id) if assigned and owner_is_pro else None,
+            assigned_patient_name=(assigned.full_name or "Patient") if assigned and owner_is_pro else None,
+            recording=patient is not None,
+            recording_for=(patient.full_name or "Patient") if patient is not None else None,
+            live_until=cfg.live_until if cfg.live_until and cfg.live_until > utcnow() else None,
+            can_edit=device_hub.config_editors(db, d, viewer),
+            can_assign=owner_is_pro,
+        )
+    return out
+
+
+def _pairing_out(db: Session, p: DevicePairing, user: User) -> PairingOut:
+    fd = db.get(FactoryDevice, p.factory_device_id)
+    device = db.get(Device, p.device_id) if p.device_id else None
+    return PairingOut(
+        id=str(p.id),
+        device_uid=fd.device_uid,
+        status=device_hub.pairing_state(p),
+        expires_at=p.expires_at,
+        device=full_device_out(db, device, user) if device is not None else None,
+    )
+
+
+@router.post("/devices/pair", response_model=PairingOut, status_code=201, summary="Pair a CardiosensAI device: then press its button")
+def pair_device(
+    body: PairIn, user: User = Depends(require_owner), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
+) -> PairingOut:
+    limiter.hit(f"pair:{user.id}", 20, 3600)
+    p = device_hub.request_pairing(db, user, body.device_uid, body.serial, body.display_name)
     audit.record(
-        db, actor=user, action="device.remove", patient_id=_audit_patient(user), resource_type="device", resource_id=d.id, meta=meta
+        db,
+        actor=user,
+        action="device.pair_request",
+        patient_id=_audit_patient(user),
+        resource_type="device",
+        resource_id=p.factory_device_id,
+        detail=body.device_uid,
+        meta=meta,
     )
     db.commit()
+    return _pairing_out(db, p, user)
+
+
+def _own_pairing(db: Session, user: User, pairing_id: uuid.UUID) -> DevicePairing:
+    p = db.get(DevicePairing, pairing_id)
+    if p is None or p.requested_by != user.id:
+        raise not_found("Pairing")
+    return p
+
+
+@router.get("/devices/pairings/{pairing_id}", response_model=PairingOut, summary="Has the device confirmed the pairing yet?")
+def pairing_status(pairing_id: uuid.UUID, user: User = Depends(require_owner), db: Session = Depends(get_db)) -> PairingOut:
+    return _pairing_out(db, _own_pairing(db, user, pairing_id), user)
+
+
+@router.delete("/devices/pairings/{pairing_id}", status_code=204, summary="Cancel a pairing request")
+def cancel_pairing(pairing_id: uuid.UUID, user: User = Depends(require_owner), db: Session = Depends(get_db)) -> None:
+    device_hub.cancel_pairing(db, _own_pairing(db, user, pairing_id))
+    db.commit()
+
+
+def _connected(db: Session, user: User, device_id: uuid.UUID) -> tuple[Device, DeviceConfig]:
+    """A paired CardiosensAI device this user may configure: its owner, or a doctor/clinic linked to its patient."""
+    d = db.get(Device, device_id)
+    cfg = db.get(DeviceConfig, device_id) if d is not None else None
+    if d is None or cfg is None or d.status != "active" or not device_hub.config_editors(db, d, user):
+        raise not_found("Device")
+    return d, cfg
+
+
+def _audit_device(db: Session, user: User, d: Device, action: str, detail: str, meta: RequestMeta) -> None:
+    owner = db.get(User, d.patient_id)
+    audit.record(
+        db,
+        actor=user,
+        action=action,
+        patient_id=owner.id if owner is not None and owner.role == "patient" else None,
+        resource_type="device",
+        resource_id=d.id,
+        detail=detail,
+        meta=meta,
+    )
+
+
+@router.put("/devices/{device_id}/config", response_model=DeviceOut, summary="Snapshot schedule, quiet hours, assigned patient")
+def update_config(
+    device_id: uuid.UUID,
+    body: DeviceConfigIn,
+    user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+    meta: RequestMeta = Depends(request_meta),
+) -> DeviceOut:
+    d, cfg = _connected(db, user, device_id)
+    changes = {k: getattr(body, k) for k in body.model_fields_set}
+    if "assigned_patient_id" in changes and changes["assigned_patient_id"] is not None:
+        try:
+            changes["assigned_patient_id"] = uuid.UUID(changes["assigned_patient_id"])
+        except ValueError as exc:
+            raise not_found("Linked patient") from exc
+    if "interval_min" in changes and changes["interval_min"] is None:
+        changes.pop("interval_min")
+    device_hub.set_config(db, d, cfg, user, changes)
+    parts = []
+    if "interval_min" in changes:
+        parts.append(f"every {cfg.interval_min} min" if cfg.interval_min else "snapshots off")
+    if "quiet_start" in changes or "quiet_end" in changes:
+        parts.append(f"quiet {cfg.quiet_start}-{cfg.quiet_end}" if cfg.quiet_start else "no quiet hours")
+    if "assigned_patient_id" in changes:
+        parts.append("assigned patient changed")
+    _audit_device(db, user, d, "device.config", "; ".join(parts) or "settings", meta)
+    db.commit()
+    return full_device_out(db, d, user)
+
+
+@router.post("/devices/{device_id}/live", response_model=DeviceOut, summary="Ask the device for a live ECG (5 minutes) or stop it")
+def device_live(
+    device_id: uuid.UUID,
+    body: LiveIn,
+    user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+    meta: RequestMeta = Depends(request_meta),
+) -> DeviceOut:
+    d, cfg = _connected(db, user, device_id)
+    limiter.hit(f"device-live:{d.id}", 60, 3600)
+    device_hub.request_live(db, d, cfg, user, body.on)
+    _audit_device(db, user, d, "device.live_request" if body.on else "device.live_stop", d.display_name, meta)
+    db.commit()
+    return full_device_out(db, d, user)
+
+
+@router.get("/patients/{patient_id}/devices", response_model=list[DeviceOut], summary="CardiosensAI devices recording for this patient")
+def patient_devices(patient_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[DeviceOut]:
+    pid = resolve_patient_id(user, patient_id)
+    get_access(db, user, pid, need="ecg")
+    own = select(Device).where(Device.patient_id == pid, Device.status == "active", Device.factory_device_id.is_not(None))
+    assigned = (
+        select(Device)
+        .join(DeviceConfig, DeviceConfig.device_id == Device.id)
+        .where(DeviceConfig.assigned_patient_id == pid, Device.status == "active")
+    )
+    rows = list(db.scalars(own)) + [d for d in db.scalars(assigned) if d.patient_id == user.id]
+    return [full_device_out(db, d, user) for d in rows]

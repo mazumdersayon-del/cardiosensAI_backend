@@ -23,6 +23,7 @@ const NAV: Record<string, { to: string; label: string }[]> = {
     { to: '/admin', label: 'Overview' },
     { to: '/admin/verification', label: 'Verification' },
     { to: '/admin/users', label: 'Users' },
+    { to: '/admin/devices', label: 'Devices' },
   ],
 };
 

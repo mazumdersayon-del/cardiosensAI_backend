@@ -10,7 +10,10 @@
 #   bash scripts/run_local.sh totp             print the current authenticator code for the demo doctor and clinic
 #   bash scripts/run_local.sh ecg-live [S]     stream a synthetic 12-lead live ECG for the demo patient for S seconds
 #                                       (default 120; 0 = until Ctrl+C) to a running API (PORT=8000 by default)
-#   bash scripts/run_local.sh stop             stop the local database container (data is kept)
+#   bash scripts/run_local.sh device [OPTIONS] run the 12-lead device simulator (../Test_Scripts/stream_device.py)
+#                                       against the local broker; demo test units CS12-TEST-0001 / -0002, secrets
+#                                       in app/scripts/seed.py (DEMO_TEST_UNITS). Options: --help
+#   bash scripts/run_local.sh stop             stop the local database and device broker containers (data is kept)
 #   bash scripts/run_local.sh --lan            listen on this PC's network address too, so phones on the same Wi-Fi
 #                                       (and other PCs) can use it: http://<this PC's IP>:8000
 #   bash scripts/run_local.sh --show-codes     keep one-time codes on screen even when real email/SMS is set up
@@ -24,6 +27,9 @@
 #   bash scripts/run_local.sh mail-test ADDRESS | sms-test NUMBER | local-show | local-off
 # With real email set up, codes are no longer shown on the page or in the log: they arrive by email (and SMS with
 # MSG91). Without MSG91, SMS counts as down, exactly like production today: sign-up goes on with the email code.
+#
+# Devices: a Mosquitto container (cardiosens-local-mqtt, localhost:1883, logins in var/mosquitto) and the device
+# bridge (app/scripts/mqtt_bridge.py) start with the API. Protocol: docs/device-protocol.md.
 #
 # Needs: Docker, Node 20+ (for the web app). Python 3.13 comes from uv; if uv isn't installed, the
 # standalone uv binary is downloaded once into ./var/tools (git-ignored).
@@ -42,6 +48,8 @@ cd "$ROOT"
 PG_CONTAINER=cardiosens-local-pg
 PG_VOLUME=cardiosens-local-pgdata
 PG_PORT=${PG_PORT:-55433}
+MQTT_CONTAINER=cardiosens-local-mqtt
+MQTT_LOCAL_PORT=${MQTT_LOCAL_PORT:-1883}
 PORT=8000
 DEV=0
 RESET=0
@@ -169,7 +177,15 @@ esac
 case "${1:-}" in
   stop)
     docker stop "$PG_CONTAINER" >/dev/null 2>&1 && echo "Stopped $PG_CONTAINER (data kept in volume $PG_VOLUME)" || echo "Not running"
+    docker rm -f "$MQTT_CONTAINER" >/dev/null 2>&1 && echo "Stopped $MQTT_CONTAINER (logins and retained messages kept in var/mosquitto)" || true
     exit 0
+    ;;
+  device)
+    shift
+    [[ -x $VENV/bin/python ]] || die "Run bash scripts/run_local.sh once first"
+    SIM="$ROOT/../Test_Scripts/stream_device.py"
+    [[ -f $SIM ]] || die "The simulator isn't at $SIM"
+    CARDIOSENS_BACKEND="$ROOT" exec "$VENV/bin/python" "$SIM" --broker localhost --port "$MQTT_LOCAL_PORT" "$@"
     ;;
   ecg-live)
     [[ -x $VENV/bin/python ]] || die "Run bash scripts/run_local.sh once first"
@@ -204,7 +220,8 @@ if [[ $RESET -eq 1 ]]; then
   log "Removing local database"
   docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
   docker volume rm "$PG_VOLUME" >/dev/null 2>&1 || true
-  rm -rf "$ROOT/var/storage"
+  docker rm -f "$MQTT_CONTAINER" >/dev/null 2>&1 || true
+  rm -rf "$ROOT/var/storage" "$ROOT/var/mosquitto"
 fi
 if [[ -z $(docker ps -q -f "name=^${PG_CONTAINER}$") ]]; then
   if [[ -n $(docker ps -aq -f "name=^${PG_CONTAINER}$") ]]; then
@@ -280,6 +297,11 @@ fi
 export STORAGE_BACKEND=local
 export STORAGE_LOCAL_PATH="$ROOT/var/storage"
 export CORS_ORIGINS='[]'
+# Device broker: the app writes the logins file, the container reads it; a HUP makes Mosquitto re-read it.
+export MQTT_HOST=127.0.0.1
+export MQTT_PORT=$MQTT_LOCAL_PORT
+export MQTT_PASSWD_FILE="$ROOT/var/mosquitto/passwd"
+export MQTT_RELOAD_COMMAND="docker kill -s HUP $MQTT_CONTAINER"
 export PYTHONDONTWRITEBYTECODE=1
 
 log "Applying database migrations"
@@ -288,6 +310,17 @@ SEED_ARGS=()
 [[ $DEMO -eq 1 ]] && SEED_ARGS+=(--demo)
 [[ -n $ADMIN_EMAIL ]] && SEED_ARGS+=(--admin-email "$ADMIN_EMAIL")
 "$VENV/bin/python" -m app.scripts.seed "${SEED_ARGS[@]}" 2>&1 | grep -v '^{' || true
+
+# ---------------------------------------------------------------- device broker (Mosquitto)
+# Recreated on every start (it holds nothing but var/mosquitto), so --lan / the port always match.
+log "Starting the device broker ($MQTT_CONTAINER on $HOST_IP:$MQTT_LOCAL_PORT)"
+mkdir -p "$ROOT/var/mosquitto"
+"$VENV/bin/python" -c "from app.core.db import SessionLocal; from app.services.device_hub import sync_broker_logins; db = SessionLocal(); sync_broker_logins(db); db.close()"
+docker rm -f "$MQTT_CONTAINER" >/dev/null 2>&1 || true
+docker run -d --name "$MQTT_CONTAINER" --user "$(id -u):$(id -g)" -p "$HOST_IP:$MQTT_LOCAL_PORT:1883" \
+  -v "$ROOT/scripts/mosquitto/cardiosens-local.conf:/mosquitto/config/mosquitto.conf:ro" \
+  -v "$ROOT/scripts/mosquitto/cardiosens.acl:/mosquitto/config/cardiosens.acl:ro" \
+  -v "$ROOT/var/mosquitto:/mosquitto/data" eclipse-mosquitto:2 >/dev/null || die "The device broker didn't start"
 
 # ---------------------------------------------------------------- web app
 command -v npm >/dev/null || die "Node.js 20+ (npm) is required for the web app"
@@ -309,7 +342,7 @@ cleanup() {
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
   wait 2>/dev/null || true
   echo
-  echo "Stopped. The database keeps running in Docker: bash scripts/run_local.sh stop"
+  echo "Stopped. The database and device broker keep running in Docker: bash scripts/run_local.sh stop"
 }
 trap cleanup EXIT INT TERM
 
@@ -330,10 +363,13 @@ cat <<EOF
   Sign in:  patient@demo.cardiosens.ai / doctor@demo.cardiosens.ai / clinic@demo.cardiosens.ai
             password cardiosens-demo-2026; doctor & clinic code: bash scripts/run_local.sh totp
   Mode:     $MODE
+  Devices:  broker localhost:$MQTT_LOCAL_PORT; simulator: bash scripts/run_local.sh device --device CS12-TEST-0001 --secret ...
 $([[ $LAN -eq 1 ]] && printf '  Phone:    same Wi-Fi, open %s ; Android app: CS_API_BASE_URL=%s npx expo start\n' "$WEB_BASE_URL" "$API_BASE_URL")
   Ctrl+C to stop.
 
 EOF
 "$VENV/bin/uvicorn" app.main:app --host "$HOST_IP" --port "$PORT" --reload --reload-dir app &
+PIDS+=($!)
+"$VENV/bin/python" -m app.scripts.mqtt_bridge &
 PIDS+=($!)
 wait "${PIDS[@]}"

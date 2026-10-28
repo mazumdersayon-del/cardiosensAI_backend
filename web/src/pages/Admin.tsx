@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, apiDownload, type AdminUser, type AdminUserPage, type ClinicReview, type DoctorReview, type LicenceFile, type PlatformStats } from '../api';
+import { api, apiDownload, apiUpload, type AdminUser, type AdminUserPage, type ClinicReview, type DoctorReview, type FactoryDevice, type FactoryImport, type LicenceFile, type PlatformStats } from '../api';
 import { useAuth } from '../auth';
 import { LicenceFileRow } from '../components/Licence';
 import { MfaSetup } from '../components/Setup';
@@ -769,6 +769,174 @@ export function AdminUsers() {
               </button>
             </div>
           )}
+        </section>
+      </div>
+    </NeedsMfa>
+  );
+}
+
+/** CardiosensAI devices from manufacturing: import the factory CSV, see pairing state and rejected messages, block or unblock. */
+export function AdminDevices() {
+  const [devices, err, reload] = useLoad(() => api<FactoryDevice[]>('GET', '/v1/admin/factory-devices'), []);
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<FactoryImport | null>(null);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [blocking, setBlocking] = useState<{ id: string; reason: string } | null>(null);
+  const [filter, setFilter] = useState('');
+  const upload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file) return;
+    setBusy(true);
+    setMsg(null);
+    setResult(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const r = await apiUpload<FactoryImport>('/v1/admin/factory-devices/import', form);
+      setResult(r);
+      if (!r.errors.length) {
+        setMsg({ kind: r.brokerUpdated ? 'ok' : 'error', text: r.brokerUpdated ? `${r.imported} devices imported. Delete the CSV now: it holds every device’s secret.` : `${r.imported} devices imported, but the broker logins couldn’t be written. The bridge retries within 5 minutes.` });
+        setFile(null);
+        reload();
+      }
+    } catch (ex) {
+      setMsg({ kind: 'error', text: errorText(ex) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const act = async (fn: () => Promise<unknown>, text: string) => {
+    setMsg(null);
+    try {
+      await fn();
+      setMsg({ kind: 'ok', text });
+      setBlocking(null);
+      reload();
+    } catch (ex) {
+      setMsg({ kind: 'error', text: errorText(ex) });
+    }
+  };
+  const f = filter.trim().toLowerCase();
+  const shown = (devices ?? []).filter((d) => !f || d.deviceUid.toLowerCase().includes(f) || d.serial.toLowerCase().includes(f) || (d.batch ?? '').toLowerCase().includes(f));
+  return (
+    <NeedsMfa>
+      <div className="stack" style={{ gap: 16 }}>
+        <h1>Devices</h1>
+        <section className="card stack">
+          <h2>Import from manufacturing</h2>
+          <p className="muted" style={{ marginTop: -4 }}>
+            CSV with a header row: <span className="mono">device_uid,serial,model_code,secret,batch,test</span>. <span className="mono">secret</span> is the device’s 64-hex factory secret
+            (never stored, only keys derived from it); <span className="mono">test=1</span> marks a test unit (synthetic data, refused in production). All rows are imported or none.
+          </p>
+          <form className="row" style={{ gap: 12, flexWrap: 'wrap' }} onSubmit={upload}>
+            <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <button type="submit" className="btn primary" disabled={busy || !file}>
+              {busy ? 'Importing…' : 'Import'}
+            </button>
+          </form>
+          {result && result.errors.length > 0 && (
+            <Banner kind="error">
+              Nothing was imported. Fix these rows and upload again:
+              <ul style={{ margin: '6px 0 0' }}>
+                {result.errors.slice(0, 50).map((x) => (
+                  <li key={`${x.line}-${x.error}`}>
+                    Line {x.line}
+                    {x.deviceUid ? ` (${x.deviceUid})` : ''}: {x.error}
+                  </li>
+                ))}
+              </ul>
+            </Banner>
+          )}
+          {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
+        </section>
+        <section className="card stack">
+          <div className="row spread" style={{ flexWrap: 'wrap', gap: 8 }}>
+            <h2 style={{ margin: 0 }}>All devices{devices ? ` (${devices.length})` : ''}</h2>
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Device ID, serial or batch" aria-label="Filter devices" />
+          </div>
+          {err && <p className="muted">{err}</p>}
+          {devices && !devices.length && <div className="empty">No devices imported yet.</div>}
+          {shown.length > 0 && (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Device</th>
+                    <th>Status</th>
+                    <th>Paired to</th>
+                    <th>Last seen</th>
+                    <th>Rejected messages</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((d) => (
+                    <tr key={d.id}>
+                      <td>
+                        <span className="mono">{d.deviceUid}</span>
+                        {d.isTest && <span className="pill none" style={{ marginLeft: 6 }}>test</span>}
+                        <br />
+                        <small className="muted">
+                          {d.serial} · {d.modelCode}
+                          {d.batch ? ` · ${d.batch}` : ''}
+                          {d.firmware ? ` · fw ${d.firmware}` : ''}
+                        </small>
+                      </td>
+                      <td>
+                        {d.status === 'blocked' ? <span className="pill error">Blocked</span> : <span className="pill ok">Available</span>}
+                        {d.blockedReason && (
+                          <>
+                            <br />
+                            <small className="muted">{d.blockedReason}</small>
+                          </>
+                        )}
+                      </td>
+                      <td>{d.pairedTo ? <span className="mono">{formatId(d.pairedTo)}</span> : '—'}</td>
+                      <td>{d.lastSeenAt ? ago(d.lastSeenAt) : 'never'}</td>
+                      <td>
+                        {d.rejectedCount}
+                        {d.lastRejectedCode && (
+                          <>
+                            <br />
+                            <small className="muted">
+                              last: {d.lastRejectedCode}, {d.lastRejectedAt ? ago(d.lastRejectedAt) : ''}
+                            </small>
+                          </>
+                        )}
+                      </td>
+                      <td>
+                        {d.status === 'blocked' ? (
+                          <button type="button" className="btn ghost small" onClick={() => void act(() => api('POST', `/v1/admin/factory-devices/${d.id}/unblock`, {}), `${d.deviceUid} can connect again.`)}>
+                            Unblock
+                          </button>
+                        ) : blocking?.id === d.id ? (
+                          <form
+                            className="row"
+                            style={{ gap: 6 }}
+                            onSubmit={(e) => (e.preventDefault(), void act(() => api('POST', `/v1/admin/factory-devices/${d.id}/block`, { reason: blocking.reason.trim() }), `${d.deviceUid} is blocked and unpaired.`))}
+                          >
+                            <input value={blocking.reason} onChange={(e) => setBlocking({ id: d.id, reason: e.target.value })} placeholder="Reason (lost, stolen, faulty)" minLength={3} maxLength={300} required />
+                            <button type="submit" className="btn danger small">
+                              Block
+                            </button>
+                            <button type="button" className="btn ghost small" onClick={() => setBlocking(null)}>
+                              Cancel
+                            </button>
+                          </form>
+                        ) : (
+                          <button type="button" className="btn ghost small" onClick={() => setBlocking({ id: d.id, reason: '' })}>
+                            Block…
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <small className="muted">Blocking unpairs the device and removes its broker login at once. Its snapshots stay in the patients’ records.</small>
         </section>
       </div>
     </NeedsMfa>

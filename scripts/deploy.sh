@@ -31,7 +31,10 @@
 #   Daily backups (systemd timer)        /var/backups/cardiosensai (kept 14 days, same disk!), plus a
 #                                        pre-migrate-*.dump before every run that applies a migration
 #   Daily account purge (systemd timer)  cardiosensai-purge: erases admin-deleted accounts after 30 days
-#   Firewall (ufw)                       SSH, HTTP, HTTPS only
+#   Device broker (Mosquitto)            mqtts://DOMAIN:8883 for CardiosensAI devices (TLS, Let's Encrypt cert),
+#                                        127.0.0.1:1883 for the bridge; logins in /var/lib/cardiosensai-mqtt/passwd
+#   Device bridge (systemd service)      cardiosensai-mqtt: broker <-> database (app/scripts/mqtt_bridge.py)
+#   Firewall (ufw)                       SSH, HTTP, HTTPS, MQTT over TLS (8883) only
 #
 # Options (each can also be given as the environment variable in brackets):
 #   --domain NAME             Public host name, e.g. app.cardiosens.ai [DOMAIN]. Empty: plain HTTP on the server IP.
@@ -69,6 +72,8 @@ ENV_FILE=$CONF_DIR/backend.env
 STATE_FILE=$CONF_DIR/deploy.env
 DATA_DIR=/var/lib/cardiosensai
 BACKUP_DIR=/var/backups/cardiosensai
+MQTT_DIR=/var/lib/cardiosensai-mqtt
+MQTT_SERVICE=cardiosensai-mqtt
 SERVICE=cardiosensai-api
 API_PORT=8000
 PYTHON_VERSION=3.13
@@ -186,7 +191,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
   ca-certificates curl gzip openssl rsync tar \
-  postgresql postgresql-client nginx certbot ufw python3 python3-venv
+  postgresql postgresql-client nginx certbot ufw python3 python3-venv mosquitto
 
 # ---------------------------------------------------------------- user and folders
 log "Creating service account and folders"
@@ -195,6 +200,8 @@ install -d -m 0755 $PREFIX
 install -d -m 0750 -o $APP_USER -g $APP_USER $DATA_DIR $DATA_DIR/storage
 install -d -m 0750 -o root -g $APP_USER $CONF_DIR
 install -d -m 0700 $BACKUP_DIR
+# Broker logins: written by the app (cardiosens), read by Mosquitto (setgid: new files get group mosquitto).
+install -d -m 2750 -o $APP_USER -g mosquitto $MQTT_DIR
 
 # ---------------------------------------------------------------- code
 log "Copying application code to $APP_DIR"
@@ -263,6 +270,13 @@ fi
 
 [[ -n $(kv_get JWT_SECRET $ENV_FILE) ]] || kv_set JWT_SECRET "$(random_secret)" $ENV_FILE
 [[ -n $(kv_get SIGNING_KEY $ENV_FILE) ]] || kv_set SIGNING_KEY "$(random_secret)" $ENV_FILE
+# Devices: DEVICE_KEYS_SECRET encrypts every device's signing key (lose it = re-import every device; it is only in
+# this file and its backups); MQTT_PASSWORD is the bridge's own broker login.
+[[ -n $(kv_get DEVICE_KEYS_SECRET $ENV_FILE) ]] || kv_set DEVICE_KEYS_SECRET "$(random_secret)" $ENV_FILE
+[[ -n $(kv_get MQTT_PASSWORD $ENV_FILE) ]] || kv_set MQTT_PASSWORD "$(random_secret)" $ENV_FILE
+kv_set MQTT_HOST 127.0.0.1 $ENV_FILE
+kv_set MQTT_PORT 1883 $ENV_FILE
+kv_set MQTT_PASSWD_FILE $MQTT_DIR/passwd $ENV_FILE
 kv_set DATABASE_URL "$DATABASE_URL" $ENV_FILE
 kv_set API_BASE_URL "$BASE_URL" $ENV_FILE
 kv_set WEB_BASE_URL "$BASE_URL" $ENV_FILE  # links in emails (the web app is served from the same host)
@@ -345,7 +359,7 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-ReadWritePaths=$DATA_DIR
+ReadWritePaths=$DATA_DIR $MQTT_DIR
 UMask=0027
 
 [Install]
@@ -437,6 +451,106 @@ EOF
 systemctl daemon-reload
 systemctl enable --now cardiosensai-purge.timer >/dev/null
 
+# ---------------------------------------------------------------- device broker + bridge
+log "Configuring the device broker (Mosquitto) and bridge"
+install -m 0644 "$SRC_DIR/scripts/mosquitto/cardiosens.acl" /etc/mosquitto/cardiosens.acl
+MQTT_TLS_CONF=""
+if [[ -n $DOMAIN && $TLS -eq 1 && -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
+  # Mosquitto can't read /etc/letsencrypt: keep a copy it owns, refreshed by certbot after every renewal.
+  install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+  cat >/etc/letsencrypt/renewal-hooks/deploy/cardiosensai-mosquitto.sh <<HOOK
+#!/bin/sh
+install -d -m 0750 -o mosquitto -g mosquitto /etc/mosquitto/certs/cardiosens
+install -m 0640 -o mosquitto -g mosquitto /etc/letsencrypt/live/$DOMAIN/fullchain.pem /etc/mosquitto/certs/cardiosens/fullchain.pem
+install -m 0640 -o mosquitto -g mosquitto /etc/letsencrypt/live/$DOMAIN/privkey.pem /etc/mosquitto/certs/cardiosens/privkey.pem
+systemctl reload mosquitto 2>/dev/null || true
+HOOK
+  chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/cardiosensai-mosquitto.sh
+  /etc/letsencrypt/renewal-hooks/deploy/cardiosensai-mosquitto.sh
+  MQTT_TLS_CONF="
+# Devices: MQTT over TLS only (health data never crosses the internet unencrypted)
+listener 8883
+certfile /etc/mosquitto/certs/cardiosens/fullchain.pem
+keyfile /etc/mosquitto/certs/cardiosens/privkey.pem
+tls_version tlsv1.2"
+else
+  warn "No HTTPS certificate: the device broker listens on 127.0.0.1 only, so devices can't connect until --domain is set up"
+fi
+cat >/etc/mosquitto/conf.d/cardiosensai.conf <<CONF
+# Written by deploy.sh. Device logins are managed by the app (Admin -> Devices); see docs/device-protocol.md.
+# The bridge (cardiosensai-mqtt), on the loopback interface only
+listener 1883 127.0.0.1
+$MQTT_TLS_CONF
+
+allow_anonymous false
+password_file $MQTT_DIR/passwd
+acl_file /etc/mosquitto/cardiosens.acl
+use_username_as_clientid true
+max_packet_size 600000
+max_inflight_messages 20
+CONF
+# The broker re-reads its logins whenever the app rewrites them (device imported, blocked, unblocked).
+cat >/etc/systemd/system/cardiosensai-mqtt-logins.path <<UNIT
+[Unit]
+Description=Reload Mosquitto when CardiosensAI device logins change
+
+[Path]
+PathChanged=$MQTT_DIR/passwd
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+cat >/etc/systemd/system/cardiosensai-mqtt-logins.service <<'UNIT'
+[Unit]
+Description=Reload Mosquitto (CardiosensAI device logins changed)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl reload mosquitto
+UNIT
+# The first password file, before Mosquitto starts (the bridge rewrites it on every start)
+run_app $VENV/bin/python -c "from app.core.db import SessionLocal; from app.services.device_hub import sync_broker_logins; db = SessionLocal(); sync_broker_logins(db); db.close()" \
+  || warn "Couldn't write the broker logins yet; the bridge writes them when it starts"
+cat >/etc/systemd/system/$MQTT_SERVICE.service <<UNIT
+[Unit]
+Description=CardiosensAI device bridge (MQTT <-> database)
+After=network-online.target postgresql.service mosquitto.service
+Wants=network-online.target postgresql.service mosquitto.service
+
+[Service]
+Type=exec
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$ENV_FILE
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=$VENV/bin/python -m app.scripts.mqtt_bridge
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=$DATA_DIR $MQTT_DIR
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now cardiosensai-mqtt-logins.path >/dev/null
+systemctl enable mosquitto >/dev/null
+systemctl restart mosquitto
+systemctl enable $MQTT_SERVICE >/dev/null
+systemctl restart $MQTT_SERVICE
+
 # ---------------------------------------------------------------- firewall
 if [[ $FIREWALL -eq 1 ]]; then
   log "Configuring firewall"
@@ -444,6 +558,7 @@ if [[ $FIREWALL -eq 1 ]]; then
   for port in ${SSH_PORTS:-22}; do ufw allow "$port/tcp" comment ssh >/dev/null; done
   ufw allow 80/tcp comment http >/dev/null
   ufw allow 443/tcp comment https >/dev/null
+  ufw allow 8883/tcp comment mqtts-devices >/dev/null
   ufw --force enable >/dev/null
 fi
 

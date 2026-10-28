@@ -49,12 +49,14 @@ class Synth12:
                 self.rr = max(0.4, 60 / self.hr + self.rnd.gauss(0, 0.03))  # mild heart-rate variability
                 ph = self.t - self.beat_start
             wander = 0.05 * math.sin(2 * math.pi * 0.25 * self.t)
-            v = {lead: self._beat(lead, ph) for lead in AMPLITUDES}
+            # Measured channels (I, II, V1-V6) carry their own noise; the limb leads are then derived from the
+            # measured I and II in integer microvolts, as a real 12-lead front end does.
+            v = {lead: round((self._beat(lead, ph) + wander + self.rnd.gauss(0, 0.012)) * 1000) for lead in AMPLITUDES}
             v["III"] = v["II"] - v["I"]
-            v["aVR"] = -(v["I"] + v["II"]) / 2
-            v["aVL"] = v["I"] - v["II"] / 2
-            v["aVF"] = v["II"] - v["I"] / 2
-            out.append(tuple(round((v[lead] + wander + self.rnd.gauss(0, 0.012)) * 1000) for lead in self.leads))
+            v["aVR"] = round(-(v["I"] + v["II"]) / 2)
+            v["aVL"] = round(v["I"] - v["II"] / 2)
+            v["aVF"] = round(v["II"] - v["I"] / 2)
+            out.append(tuple(v[lead] for lead in self.leads))
             self.t += 1 / self.fs
         return out
 

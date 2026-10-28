@@ -76,7 +76,16 @@ def test_production_refuses_unsafe_settings():
         Settings(env="production")
     with pytest.raises(ValidationError):
         Settings(env="production", jwt_secret="x" * 40, signing_key="y" * 40, dev_expose_otp=True, sms_provider="none")
-    safe = {"jwt_secret": "x" * 40, "signing_key": "y" * 40, "sms_provider": "none", "dev_expose_otp": False}
+    safe = {
+        "jwt_secret": "x" * 40,
+        "signing_key": "y" * 40,
+        "device_keys_secret": "z" * 40,
+        "mqtt_password": "m" * 30,
+        "sms_provider": "none",
+        "dev_expose_otp": False,
+    }
+    with pytest.raises(ValidationError):  # dev device-key secret
+        Settings(env="production", email_provider="smtp", smtp_host="smtp.example.com", **{**safe, "device_keys_secret": "dev-only-x" * 4})
     with pytest.raises(ValidationError):
         Settings(env="production", **safe)  # console email would log password-reset links
     with pytest.raises(ValidationError):

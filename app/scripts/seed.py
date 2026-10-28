@@ -22,8 +22,19 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal, utcnow
 from app.core.passwords import hash_password
 from app.core.storage import get_storage
-from app.models import AccessGrant, CareLink, Device, DeviceModel, EcgRecording, Measurement, Organization, ProfessionalProfile, User
-from app.services import email
+from app.models import (
+    AccessGrant,
+    CareLink,
+    Device,
+    DeviceModel,
+    EcgRecording,
+    FactoryDevice,
+    Measurement,
+    Organization,
+    ProfessionalProfile,
+    User,
+)
+from app.services import device_hub, email
 from app.services.accounts import allocate_unique_id, issue_action_token
 from app.services.ecg_synth import Synth12
 
@@ -60,16 +71,17 @@ DEVICE_MODELS = [
         "name": "CardiosensAI 12-lead monitor (development)",
         "manufacturer": "CardiosensAI",
         "kind": "monitor",
-        "capabilities": ["hr", "spo2", "bp", "resp", "temp", "glucose", "ecg"],
-        "integration": "cloud_api",
-        "regulatory_note": "In development. Not clinically validated or certified. Sends through the device stream.",
+        "capabilities": ["ecg"],
+        "integration": "mqtt",
+        "regulatory_note": "In development. Not clinically validated or certified. Connects over MQTT (docs/device-protocol.md).",
     },
 ]
 
-# Demo 12-lead monitors for the device stream (../Test_Scripts/stream_device.py): device ID, serial, owner.
-DEMO_STREAM_DEVICES = (
-    ("CS12-DEMO-P0001", "SN12L-P0001", "patient"),
-    ("CS12-DEMO-D0001", "SN12L-D0001", "doctor"),
+# Demo test units for the MQTT device simulator (../Test_Scripts/stream_device.py): device ID, serial, factory secret.
+# Imported as test units (data labelled simulated), not paired: pair them under Account → Devices. Development only.
+DEMO_TEST_UNITS = (
+    ("CS12-TEST-0001", "SN12L-T0001", "5f1d0c3e9a7b42d6a8e1c4b7f20d93a65e7c1b08d4f6a2c9e3b5d7f1a0c8e246"),
+    ("CS12-TEST-0002", "SN12L-T0002", "a3c5e7f9b1d2046e8a0c2e4f6b8d0a1c3e5f7092b4d6f8a0c1e3f5a7b9d1e3f5"),
 )
 
 
@@ -80,6 +92,9 @@ def seed_models(db: Session) -> dict[str, DeviceModel]:
         if m is None:
             m = DeviceModel(**spec)
             db.add(m)
+        elif spec["code"] == "cardiosensai-12lead-dev":  # our own model: keep it in step with this file
+            for k in ("name", "capabilities", "integration", "regulatory_note"):
+                setattr(m, k, spec[k])
         out[spec["code"]] = m
     db.flush()
     return out
@@ -281,19 +296,18 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
 
     db.flush()
     seed_demo_doctors(db, doctor)
-    for uid, serial, who in DEMO_STREAM_DEVICES:
-        owner = patient if who == "patient" else doctor
-        if db.scalar(select(Device).where(Device.device_uid == uid)) is None:
-            db.add(
-                Device(
-                    patient_id=owner.id,
-                    model_id=models["cardiosensai-12lead-dev"].id,
-                    serial=serial,
-                    device_uid=uid,
-                    display_name="12-lead monitor (demo)",
-                    registered_at=now - timedelta(days=1),
-                )
-            )
+    staff = db.scalar(select(User).where(User.role == "admin")) or doctor
+    for uid, serial, secret in DEMO_TEST_UNITS:
+        if db.scalar(select(FactoryDevice.id).where(FactoryDevice.device_uid == uid)) is None:
+            row = {
+                "device_uid": uid,
+                "serial": serial,
+                "model_code": "cardiosensai-12lead-dev",
+                "secret": secret,
+                "batch": "demo",
+                "test": "1",
+            }
+            device_hub.import_factory_row(db, staff, row, {"cardiosensai-12lead-dev": models["cardiosensai-12lead-dev"].id})
 
     if db.scalar(select(Device).where(Device.patient_id == patient.id)) is not None:
         add_demo_12lead(db, patient)

@@ -1,0 +1,11 @@
+# CardiosensAI device topics (docs/device-protocol.md). Mosquitto reads this; it isn't secret.
+# A device logs in with its device ID as username (and client id) and may only use its own topics:
+#   publish   cs/d/<id>/up          (signed messages to the server)
+#   subscribe cs/d/<id>/down/#      (retained state + acks from the server)
+pattern write cs/d/%u/up
+pattern read cs/d/%u/down/#
+
+# The bridge (app/scripts/mqtt_bridge.py) reads every device's uplink and writes every device's downlink.
+user cs-server
+topic read cs/d/+/up
+topic readwrite cs/d/+/down/#

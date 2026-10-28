@@ -19,6 +19,7 @@ dependencies = [
   "argon2-cffi>=25.1",
   "reportlab>=5.0",
   "python-multipart>=0.0.20",
+  "paho-mqtt>=2.1",  # device bridge (MQTT over TLS to the Mosquitto broker)
 ]
 
 [project.optional-dependencies]

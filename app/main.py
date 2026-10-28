@@ -5,9 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.api.v1 import (
     admin,
+    admin_devices,
     audit,
     auth,
-    device_stream,
     devices,
     doctors,
     documents,
@@ -18,6 +18,7 @@ from app.api.v1 import (
     notifications,
     reports,
     sharing,
+    snapshots,
     verification,
 )
 from app.core.config import get_settings
@@ -76,10 +77,10 @@ def create_app() -> FastAPI:
         me.router,
         audit.router,
         devices.router,
-        device_stream.router,
         doctors.router,
         measurements.router,
         ecg.router,
+        snapshots.router,
         documents.router,
         sharing.router,
         links.router,
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
         reports.router,
         verification.router,
         admin.router,
+        admin_devices.router,
     ):
         v1.include_router(r)
     app.include_router(v1)

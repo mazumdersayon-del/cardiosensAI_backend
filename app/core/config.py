@@ -76,8 +76,22 @@ class Settings(BaseSettings):
     future_skew_s: int = 5 * 60
     pre_registration_grace_s: int = 24 * 3600
     max_ecg_samples: int = 600_000  # 10 min at 1 kHz
-    # Test streams (../Test_Scripts/stream_device.py): synthetic data from a registered device, stored labelled "simulated".
-    # None = on in development/test, off in staging/production unless set to true.
+    # CardiosensAI devices over MQTT (docs/device-protocol.md). The bridge (app/devices/bridge.py) connects to the
+    # broker as MQTT_USERNAME; devices log in with a password derived from their factory secret. DEVICE_KEYS_SECRET
+    # encrypts each device's message-signing key at rest: losing it means re-importing every device.
+    device_keys_secret: str = "dev-only-insecure-device-keys-secret-change-me-0"  # noqa: S105 - refused outside dev by validator
+    mqtt_host: str = "localhost"
+    mqtt_port: int = 1883
+    mqtt_tls: bool = False
+    mqtt_username: str = "cs-server"
+    mqtt_password: str = "dev-only-mqtt-bridge-password"  # noqa: S105 - refused outside dev by validator
+    # Mosquitto password file the backend writes (device logins + the bridge's own); Mosquitto reloads it on change.
+    mqtt_passwd_file: str = "./var/mosquitto/passwd"  # noqa: S105 - a file path
+    # Run after the password file changes (local Docker broker: "docker kill -s HUP <container>"). Empty on the
+    # server, where a systemd path unit reloads Mosquitto.
+    mqtt_reload_command: str = ""
+    # Test devices (factory CSV `test=1`, e.g. ../Test_Scripts/stream_device.py): synthetic data, stored labelled
+    # "simulated". None = accepted in development/test, refused in staging/production unless set to true.
     device_test_streams: bool | None = None
 
     rate_limit_otp_per_phone: int = 5
@@ -104,6 +118,10 @@ class Settings(BaseSettings):
                 problems.append("JWT_SECRET must be a random value of at least 32 characters")
             if "dev-only" in self.signing_key or len(self.signing_key) < 32:
                 problems.append("SIGNING_KEY must be a random value of at least 32 characters")
+            if "dev-only" in self.mqtt_password or len(self.mqtt_password) < 24:
+                problems.append("MQTT_PASSWORD (the bridge's broker login) must be a random value of at least 24 characters")
+            if "dev-only" in self.device_keys_secret or len(self.device_keys_secret) < 32:
+                problems.append("DEVICE_KEYS_SECRET must be a random value of at least 32 characters")
             if self.dev_expose_otp:
                 problems.append("DEV_EXPOSE_OTP must be false")
             if self.sms_provider == "console":

@@ -539,9 +539,30 @@ export interface DeviceModel {
   capabilities: string[];
 }
 
+export interface DeviceConfig {
+  intervalMin: number;
+  intervals: number[];
+  quietStart: string | null;
+  quietEnd: string | null;
+  timezone: string;
+  pairedAt: string;
+  assignedPatientId: string | null;
+  assignedPatientName: string | null;
+  /** Taking snapshots for a patient right now */
+  recording: boolean;
+  recordingFor: string | null;
+  liveUntil: string | null;
+  canEdit: boolean;
+  canAssign: boolean;
+}
+
 export interface RegisteredDevice {
   id: string;
   deviceUid: string | null;
+  /** A CardiosensAI device paired over the internet (MQTT) */
+  connected: boolean;
+  online: boolean | null;
+  config: DeviceConfig | null;
   modelCode: string;
   modelName: string;
   kind: string;
@@ -552,4 +573,78 @@ export interface RegisteredDevice {
   batteryPct: number | null;
   registeredAt: string;
   lastSeenAt: string | null;
+}
+
+export interface Pairing {
+  id: string;
+  deviceUid: string;
+  status: 'pending' | 'accepted' | 'expired' | 'cancelled';
+  expiresAt: string;
+  device: RegisteredDevice | null;
+}
+
+export interface SnapshotLabel {
+  doctorId: string;
+  doctorName: string;
+  scpCodes: Record<string, number>;
+  signalQuality: 'good' | 'acceptable' | 'poor' | null;
+  note: string | null;
+  updatedAt: string;
+}
+
+export interface EcgSnapshot {
+  id: string;
+  patientId: string;
+  deviceName: string | null;
+  recordedAt: string;
+  durationS: number;
+  sampleRateHz: number;
+  leads: string[];
+  quality: 'good' | 'acceptable' | 'poor';
+  qualityDetail: Partial<Record<'leadOff' | 'flat' | 'saturated' | 'noisy', string[]>>;
+  averageHr: number | null;
+  acquisition: string;
+  /** scheduled, or live (someone pressed Live) */
+  trigger: 'scheduled' | 'live';
+  labels: SnapshotLabel[];
+}
+
+export interface ScpCode {
+  code: string;
+  description: string;
+  group: string;
+}
+
+export interface Consent {
+  id: string;
+  kind: 'data_processing' | 'terms' | 'research';
+  version: string;
+  grantedAt: string;
+  withdrawnAt: string | null;
+}
+
+export interface FactoryDevice {
+  id: string;
+  deviceUid: string;
+  serial: string;
+  modelCode: string;
+  batch: string | null;
+  isTest: boolean;
+  status: 'available' | 'blocked';
+  blockedReason: string | null;
+  firmware: string | null;
+  lastSeenAt: string | null;
+  /** The owner's 16-digit ID while paired */
+  pairedTo: string | null;
+  pairedRole: string | null;
+  rejectedCount: number;
+  lastRejectedCode: string | null;
+  lastRejectedAt: string | null;
+  createdAt: string;
+}
+
+export interface FactoryImport {
+  imported: number;
+  errors: { line: number; deviceUid: string | null; error: string }[];
+  brokerUpdated: boolean;
 }

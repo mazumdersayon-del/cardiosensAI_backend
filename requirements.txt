@@ -20,6 +20,7 @@ idna==3.20                # via anyio, email-validator
 mako==1.4.3               # via alembic
 markupsafe==3.0.4         # via mako
 opentelemetry-api==1.45.1  # via fastapi
+paho-mqtt==2.1.0          # via cardiosensai-backend (pyproject.toml)
 pillow==12.3.0            # via reportlab
 psycopg==3.3.6            # via cardiosensai-backend (pyproject.toml)
 psycopg-binary==3.3.6 ; implementation_name != 'pypy'  # via psycopg

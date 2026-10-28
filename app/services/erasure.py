@@ -23,12 +23,17 @@ from app.models import (
     ActionToken,
     CareLink,
     Device,
+    DeviceConfig,
+    DevicePairing,
     Document,
     DocumentComment,
     DocumentFile,
     EcgLiveChunk,
     EcgLiveSession,
     EcgRecording,
+    EcgSnapshot,
+    EcgSnapshotLabel,
+    FactoryDevice,
     Invite,
     Measurement,
     Notification,
@@ -39,7 +44,7 @@ from app.models import (
     User,
     VerificationFile,
 )
-from app.services import audit
+from app.services import audit, device_hub
 
 GRACE = timedelta(days=30)
 
@@ -73,6 +78,7 @@ def erase_account(
     # ---- health data the account owns (patients)
     keys += [k for k in db.scalars(select(EcgRecording.storage_key).where(EcgRecording.patient_id == user.id)) if k]
     keys += [k for k in db.scalars(select(Report.storage_key).where(Report.patient_id == user.id)) if k]
+    keys += [k for k in db.scalars(select(EcgSnapshot.storage_key).where(EcgSnapshot.patient_id == user.id)) if k]
     doc_ids = select(Document.id).where(Document.patient_id == user.id)
     keys += [k for k in db.scalars(select(DocumentFile.storage_key).where(DocumentFile.document_id.in_(doc_ids))) if k]
     grant_ids = select(AccessGrant.id).where(AccessGrant.patient_id == user.id)
@@ -91,6 +97,18 @@ def erase_account(
     db.execute(delete(DocumentFile).where(DocumentFile.document_id.in_(doc_ids)))
     db.execute(delete(Document).where(Document.patient_id == user.id))
     db.execute(update(Report).where(Report.patient_id == user.id).values(status="deleted", storage_key=None))
+    snapshot_ids = select(EcgSnapshot.id).where(EcgSnapshot.patient_id == user.id)
+    db.execute(delete(EcgSnapshotLabel).where(or_(EcgSnapshotLabel.snapshot_id.in_(snapshot_ids), EcgSnapshotLabel.doctor_id == user.id)))
+    db.execute(delete(EcgSnapshot).where(EcgSnapshot.patient_id == user.id))
+    # CardiosensAI devices: unpair (the device is told at once); doctors' devices assigned to this patient stop recording.
+    for d in db.scalars(
+        select(Device).where(Device.patient_id == user.id, Device.status == "active", Device.factory_device_id.is_not(None))
+    ):
+        device_hub.unpair(db, d, actor=actor, why="account erased")
+    for cfg in db.scalars(select(DeviceConfig).where(DeviceConfig.assigned_patient_id == user.id)):
+        cfg.assigned_patient_id, cfg.live_until = None, None
+        device_hub.queue_state(db, db.get(FactoryDevice, cfg.factory_device_id))
+    db.execute(delete(DevicePairing).where(DevicePairing.requested_by == user.id))
     db.execute(update(Device).where(Device.patient_id == user.id, Device.status == "active").values(status="retired", retired_at=now))
 
     # ---- links: as patient or doctor, and (clinic login) everything of the clinic

@@ -1,7 +1,7 @@
 import { useAuth } from '../auth';
 import { useCallback, useState } from 'react';
 import { DocumentUpload } from '../components/Documents';
-import { EcgRecordingsCard, LatestRecording, LiveEcg } from '../components/Ecg';
+import { EcgCards } from '../components/EcgCards';
 import FileHistory from '../components/FileHistory';
 import { LinksTable, useLinks } from '../components/Links';
 import ReportsPanel from '../components/Reports';
@@ -10,14 +10,12 @@ import { Banner } from '../components/ui';
 import { History, LatestVitals } from '../components/Vitals';
 
 /**
- * Patient home: a slim latest-readings strip; a big Live ECG card with the ECG recordings card beside it (click to
- * enlarge); one card with reports and documents on the left and the history of uploads and reports on the right.
+ * Patient home: a slim latest-readings strip; a big Live ECG card (Live button; shows the ECG picked in the list) with
+ * the ECG recordings card beside it (recordings and device snapshots by date and time); one card with reports and documents on the left and the history of uploads and reports on the right.
  */
 export default function PatientHome() {
   const { user } = useAuth();
   const [links, , reloadLinks] = useLinks();
-  const [ecgKey, setEcgKey] = useState(0);
-  const onSaved = useCallback(() => setEcgKey((k) => k + 1), []);
   const [filesKey, setFilesKey] = useState(0); // a new upload or report refreshes History
   const filesChanged = useCallback(() => setFilesKey((k) => k + 1), []);
   if (!user) return null;
@@ -46,14 +44,7 @@ export default function PatientHome() {
         <h2>Latest readings</h2>
         <LatestVitals patientId="me" compact />
       </section>
-      <section className="card span-8">
-        <h2>Live ECG</h2>
-        <LiveEcg patientId="me" onSaved={onSaved} idle={<LatestRecording patientId="me" reloadKey={ecgKey} />} />
-      </section>
-      <section className="card span-4">
-        <h2>ECG recordings</h2>
-        <EcgRecordingsCard patientId="me" reloadKey={ecgKey} />
-      </section>
+      <EcgCards patientId="me" />
       <section className="card span-12 files-card">
         <div className="files-main">
           <h2>Reports and documents</h2>

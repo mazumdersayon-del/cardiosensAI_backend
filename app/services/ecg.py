@@ -11,7 +11,7 @@ from app.core.db import utcnow
 from app.core.ecg_leads import STANDARD_12
 from app.core.errors import bad_request
 from app.core.storage import get_storage
-from app.models import EcgLiveChunk, EcgLiveSession, EcgRecording
+from app.models import Device, EcgLiveChunk, EcgLiveSession, EcgRecording
 
 LIVE_STALLED_AFTER = timedelta(seconds=5)
 LIVE_ABANDONED_AFTER = timedelta(minutes=2)
@@ -40,7 +40,8 @@ def live_state(s: EcgLiveSession) -> str:
 def finalize(db: Session, s: EcgLiveSession, quality: str = "unknown") -> EcgRecording | None:
     """Join the chunks into one stored recording (frames in seq order) and end the session.
 
-    A session with no data ends without a recording. Caller commits.
+    A session with no data ends without a recording, and so does a CardiosensAI device's live preview: the device
+    uploads the same 20 s as a snapshot (services/device_hub), which is what's kept. Caller commits.
     """
     if s.status != "live":
         return db.get(EcgRecording, s.recording_id) if s.recording_id else None
@@ -49,7 +50,8 @@ def finalize(db: Session, s: EcgLiveSession, quality: str = "unknown") -> EcgRec
     chunks = list(db.scalars(select(EcgLiveChunk).where(EcgLiveChunk.session_id == s.id).order_by(EcgLiveChunk.seq)))
     raw = b"".join(c.data for c in chunks)
     db.execute(delete(EcgLiveChunk).where(EcgLiveChunk.session_id == s.id))
-    if not raw:
+    device = db.get(Device, s.device_id) if s.device_id else None
+    if not raw or (device is not None and device.factory_device_id is not None):
         return None
     rec_id = uuid.uuid4()
     key = f"ecg/{s.patient_id}/{rec_id}.i16"

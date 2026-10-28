@@ -27,22 +27,36 @@ class DeviceModelOut(CamelModel):
 class DeviceIn(CamelModel):
     model_code: str = Field(max_length=64)
     serial: str = Field(min_length=1, max_length=64)
-    device_uid: str | None = Field(
-        default=None,
-        min_length=6,
-        max_length=64,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:\-]*$",
-        description="The device's own unique id (Account → Devices)",
-    )
     display_name: str | None = Field(default=None, max_length=80)
     client_ref: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_.:\-]+$")
     ble_identifier: str | None = Field(default=None, max_length=64)
     firmware: str | None = Field(default=None, max_length=40)
 
 
+class DeviceConfigOut(CamelModel):
+    """A paired CardiosensAI device's schedule (Account → Devices → Device configuration)."""
+
+    interval_min: int
+    intervals: list[int]
+    quiet_start: str | None
+    quiet_end: str | None
+    timezone: str
+    paired_at: datetime
+    assigned_patient_id: str | None = None
+    assigned_patient_name: str | None = None
+    recording: bool = Field(description="Taking snapshots for a patient right now")
+    recording_for: str | None = Field(default=None, description="That patient's name")
+    live_until: datetime | None = None
+    can_edit: bool = False
+    can_assign: bool = False
+
+
 class DeviceOut(CamelModel):
     id: str
     device_uid: str | None = None
+    connected: bool = Field(default=False, description="A CardiosensAI device paired over the internet (MQTT)")
+    online: bool | None = None
+    config: DeviceConfigOut | None = None
     model_code: str
     model_name: str
     kind: str
