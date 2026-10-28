@@ -453,7 +453,7 @@ systemctl enable --now cardiosensai-purge.timer >/dev/null
 
 # ---------------------------------------------------------------- device broker + bridge
 log "Configuring the device broker (Mosquitto) and bridge"
-install -m 0644 "$SRC_DIR/scripts/mosquitto/cardiosens.acl" /etc/mosquitto/cardiosens.acl
+install -m 0640 -o root -g mosquitto "$SRC_DIR/scripts/mosquitto/cardiosens.acl" /etc/mosquitto/cardiosens.acl
 MQTT_TLS_CONF=""
 if [[ -n $DOMAIN && $TLS -eq 1 && -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem ]]; then
   # Mosquitto can't read /etc/letsencrypt: keep a copy it owns, refreshed by certbot after every renewal.
@@ -547,7 +547,12 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now cardiosensai-mqtt-logins.path >/dev/null
 systemctl enable mosquitto >/dev/null
-systemctl restart mosquitto
+systemctl reset-failed mosquitto 2>/dev/null || true
+if ! systemctl restart mosquitto; then
+  # systemd's journal only says "failed": Mosquitto writes the reason to its own log
+  tail -n 15 /var/log/mosquitto/mosquitto.log >&2 || true
+  die "Mosquitto didn't start (its log is above; config: /etc/mosquitto/conf.d/cardiosensai.conf)"
+fi
 systemctl enable $MQTT_SERVICE >/dev/null
 systemctl restart $MQTT_SERVICE
 
