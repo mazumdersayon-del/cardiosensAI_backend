@@ -34,6 +34,11 @@ export function ContactDetails() {
           Add {kind === 'email' ? 'email' : 'mobile number'}
         </button>
       )}
+      {v && !ok && kind === 'phone' && !adding && (
+        <button type="button" className="btn ghost small" onClick={() => (setAdding('phone'), setValue(v), setMsg(null))}>
+          Confirm mobile number
+        </button>
+      )}
     </div>
   );
 
@@ -54,7 +59,7 @@ export function ContactDetails() {
               } else {
                 await api<User>('POST', '/v1/me/contact/verify', { challengeId: sent.challengeId, code });
                 await reload();
-                setMsg({ kind: 'ok', text: adding === 'email' ? 'Email added and confirmed.' : 'Mobile number added and confirmed.' });
+                setMsg({ kind: 'ok', text: adding === 'email' ? 'Email added and confirmed.' : 'Mobile number confirmed.' });
                 reset();
               }
             } catch (ex) {

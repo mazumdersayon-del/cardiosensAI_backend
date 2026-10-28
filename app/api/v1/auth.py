@@ -10,6 +10,7 @@ Web sessions keep the refresh token in an httpOnly, SameSite=Strict cookie scope
 access token in memory only. The app keeps receiving the refresh token in the response body.
 """
 
+import contextlib
 import re
 import uuid
 from datetime import date, timedelta
@@ -66,7 +67,15 @@ from app.schemas.auth import (
     TokenOut,
 )
 from app.services import audit, email, google, otp, sms
-from app.services.accounts import account_status, allocate_unique_id, consume_action_token, is_activated, issue_action_token
+from app.services.accounts import (
+    account_status,
+    allocate_unique_id,
+    consume_action_token,
+    is_activated,
+    issue_action_token,
+    phone_holder,
+    release_unconfirmed_phone,
+)
 from app.services.email import mask_email
 from app.services.serializers import user_out
 from app.services.sms import mask_phone, send_otp
@@ -363,6 +372,7 @@ def _signup_out(primary: OtpChallenge, email_ch: OtpChallenge | None, codes: dic
         signup_id=str(primary.id),
         phone_masked=mask_phone(primary.phone or ""),
         email_masked=mask_email(email_ch.email) if email_ch and email_ch.email else None,
+        phone_code_sent=not (primary.payload or {}).get("sms_skipped"),
         expires_in_s=get_settings().otp_ttl_s,
         dev_phone_code=otp.dev_code(codes["sms"]) if "sms" in codes else None,
         dev_email_code=otp.dev_code(codes["email"]) if "email" in codes else None,
@@ -375,11 +385,14 @@ def register(body: RegisterIn, db: Session = Depends(get_db), meta: RequestMeta 
 
     The answer looks the same whether or not the number or address already has an account: an existing owner
     gets a notice ("someone tried to register…") instead of a code, so the sign-up can't complete.
+
+    SMS down (MSG91 failing or not set up): with an email address the sign-up goes on with the email code only
+    (`phoneCodeSent: false`) and the account keeps the number unconfirmed until it is confirmed later; without one the
+    answer is 503 asking for an email address.
     """
     limiter.hit(f"register:ip:{meta.ip}", 10, 3600)
     limiter.hit(f"register:phone:{body.phone}", 5, 3600)
-    if not sms.available():
-        raise sms.UNAVAILABLE
+    sms_up = sms.available()
     if body.role == "doctor" and body.doctor is None:
         raise bad_request("missing_details", "Doctors must give their registration number and medical council")
     if body.role == "clinic" and body.clinic is None:
@@ -398,8 +411,11 @@ def register(body: RegisterIn, db: Session = Depends(get_db), meta: RequestMeta 
         check_policy(body.password, email=addr)
     elif body.password:
         check_policy(body.password, email=addr)
+    if not sms_up and addr is None:
+        raise sms.SIGNUP_NEEDS_EMAIL
 
-    phone_taken = db.scalar(select(User.id).where(User.phone == body.phone)) is not None
+    # A number someone saved unconfirmed (sign-up during an SMS outage) doesn't block the person who can receive its SMS.
+    phone_taken = phone_holder(db, body.phone, confirmed_only=sms_up) is not None
     email_taken = addr is not None and google_sub is None and db.scalar(select(User.id).where(func.lower(User.email) == addr)) is not None
     payload = {
         "role": body.role,
@@ -411,24 +427,35 @@ def register(body: RegisterIn, db: Session = Depends(get_db), meta: RequestMeta 
         "doctor": body.doctor.model_dump() if body.doctor else None,
         "clinic": body.clinic.model_dump() if body.clinic else None,
         "blocked": phone_taken or email_taken,
+        "sms_skipped": not sms_up,
     }
     primary, sms_code = otp.create(db, channel="sms", purpose="signup", phone=body.phone, payload=payload)
     primary.group_id = primary.id
     email_ch, email_code = None, None
-    if addr and google_sub is None:  # a Google address is already verified by Google
+    # A Google address is already verified by Google; it still gets a code when that code is all the sign-up has.
+    if addr and (google_sub is None or not sms_up):
         email_ch, email_code = otp.create(db, channel="email", purpose="signup", email=addr, group_id=primary.id)
     db.commit()
 
-    if phone_taken:
+    if sms_up and phone_taken:
         sms.send_already_registered(body.phone)
-    else:
-        otp.deliver(primary, sms_code, body.full_name)
+    elif sms_up:
+        try:
+            otp.deliver(primary, sms_code, body.full_name)
+        except ApiError:
+            if addr is None:
+                raise sms.SIGNUP_NEEDS_EMAIL from None
+            primary.payload = {**payload, "sms_skipped": True}  # new dict: JSON columns track reassignment, not mutation
+            if email_ch is None:
+                email_ch, email_code = otp.create(db, channel="email", purpose="signup", email=addr, group_id=primary.id)
+            db.commit()
     if email_ch is not None:
         if email_taken:
             email.send_registration_attempt(addr)
         else:
             otp.deliver(email_ch, email_code, body.full_name)
-    expose = {} if payload["blocked"] else {"sms": sms_code, **({"email": email_code} if email_ch else {})}
+    skipped = (primary.payload or {}).get("sms_skipped")
+    expose = {} if payload["blocked"] else {**({} if skipped else {"sms": sms_code}), **({"email": email_code} if email_ch else {})}
     return _signup_out(primary, email_ch, expose)
 
 
@@ -453,9 +480,18 @@ def register_resend(body: SignupIdIn, db: Session = Depends(get_db), meta: Reque
         codes["email"] = otp.renew(email_ch)
     db.commit()
     if not payload.get("blocked"):
-        otp.deliver(primary, codes["sms"], payload.get("full_name"))
+        if not payload.get("sms_skipped"):
+            try:
+                otp.deliver(primary, codes["sms"], payload.get("full_name"))
+            except ApiError:
+                if email_ch is None:
+                    raise sms.SIGNUP_NEEDS_EMAIL from None
+                primary.payload = {**payload, "sms_skipped": True}  # carry on with the email code only
+                db.commit()
         if email_ch is not None:
             otp.deliver(email_ch, codes["email"], payload.get("full_name"))
+    if (primary.payload or {}).get("sms_skipped"):
+        codes.pop("sms")
     return _signup_out(primary, email_ch, {} if payload.get("blocked") else codes)
 
 
@@ -466,7 +502,14 @@ def register_verify(
     body: SignupVerifyIn, response: Response, db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
 ) -> TokenOut:
     primary, email_ch = _signup_parts(db, body.signup_id)
-    otp.check(db, primary, body.phone_code, purpose="signup")
+    sms_skipped = bool((primary.payload or {}).get("sms_skipped"))
+    if sms_skipped:  # SMS was down: the email code alone activates the account; the number stays unconfirmed
+        if primary.consumed_at is not None or primary.expires_at <= utcnow() or email_ch is None:
+            raise otp.INVALID
+    elif not body.phone_code:
+        raise bad_request("phone_code_required", "Enter the code we sent to your mobile number")
+    else:
+        otp.check(db, primary, body.phone_code, purpose="signup")
     if email_ch is not None:
         if not body.email_code:
             raise bad_request("email_code_required", "Enter the code we sent to your email as well")
@@ -474,6 +517,10 @@ def register_verify(
     p = primary.payload or {}
     if p.get("blocked"):
         raise otp.INVALID
+    if not sms_skipped:
+        released = release_unconfirmed_phone(db, primary.phone or "")
+        if released is not None:
+            audit.record(db, actor=released, action="account.phone_released", detail="number confirmed by another sign-up", meta=meta)
     taken = db.scalar(
         select(User.id).where(
             or_(
@@ -490,7 +537,7 @@ def register_verify(
     user = User(
         role=p["role"],
         phone=primary.phone,
-        phone_verified_at=now,
+        phone_verified_at=None if sms_skipped else now,
         email=p.get("email"),
         email_verified_at=now if p.get("email") else None,
         google_sub=p.get("google_sub"),
@@ -529,6 +576,8 @@ def register_verify(
             ch.consumed_at = now
             ch.payload = None  # the password hash has done its job
     via = "google" if user.google_sub else ("mobile + email" if email_ch else "mobile")
+    if sms_skipped:
+        via += ", SMS down: number not confirmed yet"
     audit.record(db, actor=user, action="account.create", detail=f"{user.role} account ({via})", meta=meta)
     out = _issue_tokens(db, user, meta, new_account=True)
     audit.record(db, actor=user, action="auth.login", detail="sign-up", meta=meta)
@@ -551,15 +600,21 @@ def _finish_sign_in(
     return _respond_tokens(out, response, web_session)
 
 
-@router.post("/login/start", response_model=LoginStartOut, summary="Sign-in step 1: email → code by email, mobile number → code by SMS")
+@router.post(
+    "/login/start",
+    response_model=LoginStartOut,
+    summary="Sign-in step 1: a code to the email or number typed, and one to the account's other confirmed contact",
+)
 def login_start(body: LoginStartIn, db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)) -> LoginStartOut:
-    """Same answer whether or not the address has an account (then no code is sent)."""
+    """Email → code by email, mobile number → code by SMS (MSG91). If the account also has a confirmed number or email,
+    a second code goes there; either code signs in. Same answer whether or not the address has an account (then no
+    code is sent), and the answer never shows the other contact."""
     s = get_settings()
     kind, value = _identifier(body.identifier)
     limiter.hit(f"login-code:{value}", s.rate_limit_otp_per_phone, s.rate_limit_window_s)
     limiter.hit(f"login-code:ip:{meta.ip}", s.rate_limit_otp_per_ip, s.rate_limit_window_s)
     if kind == "phone" and not sms.available():
-        raise sms.UNAVAILABLE
+        raise sms.LOGIN_UNAVAILABLE
     user = _user_by(db, kind, value)
     target = user if user is not None and user.status == "active" else None
     ch, code = otp.create(
@@ -570,23 +625,38 @@ def login_start(body: LoginStartIn, db: Session = Depends(get_db), meta: Request
         email=value if kind == "email" else None,
         user_id=target.id if target else None,
     )
+    ch.group_id = ch.id
+    # Only to a contact the account has confirmed: an unconfirmed (possibly mistyped) one may belong to someone else.
+    other: tuple[OtpChallenge, str] | None = None
+    if target is not None and kind == "email" and target.phone and target.phone_verified_at and sms.available():
+        other = otp.create(db, channel="sms", purpose="login", phone=target.phone, user_id=target.id, group_id=ch.id)
+    elif target is not None and kind == "phone" and target.email and target.email_verified_at:
+        other = otp.create(db, channel="email", purpose="login", email=target.email.lower(), user_id=target.id, group_id=ch.id)
     db.commit()
     if target is not None:
-        otp.deliver(ch, code, target.full_name)
+        try:
+            otp.deliver(ch, code, target.full_name)
+        except ApiError:
+            raise sms.LOGIN_UNAVAILABLE from None  # only SMS raises; email failures are logged
+        if other is not None:
+            with contextlib.suppress(ApiError):  # the second code is a convenience; the first went out (sms.py logs failures)
+                otp.deliver(other[0], other[1], target.full_name)
     return LoginStartOut(
         challenge_id=str(ch.id),
         channel=ch.channel,
         destination_masked=mask_email(value) if kind == "email" else mask_phone(value),
         expires_in_s=s.otp_ttl_s,
         dev_code=otp.dev_code(code) if target else None,
+        dev_other_code=otp.dev_code(other[1]) if other else None,
     )
 
 
-@router.post("/login/verify", response_model=TokenOut | MfaRequiredOut, summary="Sign-in step 2: the one-time code")
+@router.post("/login/verify", response_model=TokenOut | MfaRequiredOut, summary="Sign-in step 2: either one-time code")
 def login_verify(
     body: LoginCodeIn, response: Response, db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
 ) -> TokenOut | MfaRequiredOut:
-    ch = otp.check(db, otp.get(db, body.challenge_id), body.code, purpose="login")
+    primary = otp.get(db, body.challenge_id)
+    ch = otp.check_any(db, primary, body.code, purpose="login")
     user = db.get(User, ch.user_id) if ch.user_id else None
     if user is None or user.status == "deleted":
         raise otp.INVALID
@@ -594,7 +664,7 @@ def login_verify(
         db.commit()
         raise blocked_error(user)
     now = utcnow()
-    ch.consumed_at = now
+    otp.consume_group(db, primary)
     # The code proves the number or address (older accounts may not have confirmed it yet).
     if ch.channel == "sms" and user.phone == ch.phone:
         user.phone_verified_at = user.phone_verified_at or now

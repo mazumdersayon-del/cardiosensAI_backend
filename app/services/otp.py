@@ -8,6 +8,7 @@ also returned by the API.
 import uuid
 from datetime import timedelta
 
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -87,6 +88,43 @@ def check(db: Session, ch: OtpChallenge | None, code: str, *, purpose: str) -> O
         db.commit()  # keep the attempt count
         raise INVALID
     return ch
+
+
+def check_any(db: Session, primary: OtpChallenge | None, code: str, *, purpose: str) -> OtpChallenge:
+    """Like `check`, but the code may be the primary's or any live challenge in its group (sign-in sends one code
+    by email and one by SMS; either works). The group shares the primary's attempt count. Returns the matching one."""
+    s = get_settings()
+    now = utcnow()
+    if primary is None or primary.purpose != purpose or primary.consumed_at is not None or primary.expires_at <= now:
+        raise INVALID
+    if primary.attempts >= s.otp_max_attempts:
+        raise INVALID
+    primary.attempts += 1
+    candidates = [primary]
+    if primary.group_id == primary.id:
+        candidates += db.scalars(
+            select(OtpChallenge).where(
+                OtpChallenge.group_id == primary.id,
+                OtpChallenge.id != primary.id,
+                OtpChallenge.purpose == purpose,
+                OtpChallenge.consumed_at.is_(None),
+                OtpChallenge.expires_at > now,
+            )
+        ).all()
+    for ch in candidates:
+        if constant_time_equal(ch.code_hash, hash_otp(ch.id, destination(ch), code)):
+            return ch
+    db.commit()  # keep the attempt count
+    raise INVALID
+
+
+def consume_group(db: Session, primary: OtpChallenge) -> None:
+    """Use up the primary and every code sent with it."""
+    now = utcnow()
+    primary.consumed_at = now
+    if primary.group_id == primary.id:
+        live = (OtpChallenge.group_id == primary.id, OtpChallenge.consumed_at.is_(None))
+        db.execute(update(OtpChallenge).where(*live).values(consumed_at=now))
 
 
 def get(db: Session, raw_id: str) -> OtpChallenge | None:

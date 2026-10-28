@@ -15,7 +15,7 @@ Patients, doctors and clinics are identified and linked by a **16-digit Cardiose
 
 | Area | Summary |
 |---|---|
-| **Sign-up and sign-in** | Sign-up needs a **mobile number** (email optional): a 6-digit code goes to the phone, and to the email if given; entering them creates the account, activated and signed in (no confirmation links). Sign-in: type an email or mobile number → a code by email or SMS on a separate page, with **"use password instead"** (argon2id, 10+ characters, common-password check, 5 failures lock for 15 min). **Continue with Google** on both pages (Google Identity Services; sign-up with Google still confirms the mobile number). TOTP second factor, **required for doctors, clinics and staff**. Password reset by emailed link. 15-minute access tokens, rotating refresh tokens with reuse detection; the web app keeps its refresh token in an httpOnly SameSite=Strict cookie |
+| **Sign-up and sign-in** | Sign-up needs a **mobile number** (email optional): a 6-digit code goes to the phone, and to the email if given; entering them creates the account, activated and signed in (no confirmation links). **If text messages are down** (MSG91 failing or not set up), sign-up goes on with the email code only and the mobile number is confirmed later in Settings; without an email it asks for one. Sign-in: type an email or mobile number → a code by email or SMS, plus one to the account's other confirmed email or number (either works), on a separate page (a number while SMS is down → "use your email or your password" with a **Sign in with password** button), with **"use password instead"** (argon2id, 10+ characters, common-password check, 5 failures lock for 15 min). **Continue with Google** on both pages (Google Identity Services; sign-up with Google still confirms the mobile number). TOTP second factor, **required for doctors, clinics and staff**. Password reset by emailed link. 15-minute access tokens, rotating refresh tokens with reuse detection; the web app keeps its refresh token in an httpOnly SameSite=Strict cookie |
 | **Accounts** | Patient, doctor, clinic (self sign-up, role chosen on the form) and admin (CardiosensAI staff). Every account has a **16-digit ID**: role digit (1 patient, 2 doctor, 3 clinic, 9 staff) + 14 random digits + Luhn check digit. A clinic is an organisation with its own ID and, in v1, one login |
 | **Links** | Patient↔doctor, patient↔clinic and doctor↔clinic, made by typing the other's 16-digit ID. Both sides approve (the requester's side on request), so the patient approves every patient link. An active patient link gives full, revocable access through an access grant; ending it stops access at once. A clinic's link doesn't extend to its doctors. A clinic can ask a patient to link with one of its doctors. Doctors and clinics must be verified by staff **and** use two-step sign-in before they can link or see anything |
 | **Web app** | React SPA at `/`: the sign-in page, or the signed-in role's dashboard. Doctor/clinic home leads with **latest recordings** (newest readings, last ECG, live badge) across linked patients; a patient's page starts with the live ECG, latest readings, newest ECG and documents, with **History behind a button**. Light and dark themes |
@@ -41,7 +41,7 @@ Every operational task has a script. This section is the reference for all of th
 | [`scripts/nginx.sh`](#scriptsnginxsh) | Server | root | nginx site + Let's Encrypt certificate (run by `deploy.sh`, or alone) |
 | [`scripts/update_ssl.sh`](#scriptsupdate_sslsh) | Server | root | Create, check or renew the HTTPS certificate |
 | [`scripts/set_smtp.sh`](#scriptsset_smtpsh) | Server | root | Set up outgoing email (SMTP) with a hidden password prompt, restart, send a test |
-| [`scripts/set_sms.sh`](#scriptsset_smssh) | Server | root | Set up SMS for one-time codes (MSG91 / Twilio) with hidden prompts, restart, send a test code. **Needed for sign-up** |
+| [`scripts/setup_msg91.sh`](#scriptssetup_msg91sh) | Server | root | Set up MSG91 for mobile-number one-time codes (hidden auth-key prompt), restart, send a test code. **Needed for sign-up** |
 | [`app/scripts/seed.py`](#appscriptsseedpy) | Either | database settings | Device models, staff accounts, demo data |
 | [`app/scripts/simulate_ecg.py`](#appscriptssimulate_ecgpy) | Either | a running API | Stream a synthetic 12-lead live ECG through the public API |
 | [`app/scripts/test_email.py`](#appscriptstest_emailpy) | Either | mail settings | Send a test email to check SMTP settings |
@@ -124,7 +124,7 @@ What it does, in order:
 2. Installs system packages (PostgreSQL, rsync, curl…) and creates the `cardiosens` service account and folders.
 3. Copies the code to `/opt/cardiosensai/app` (rsync, root-owned; `.git`, `.venv`, `var`, `tests`, `web/node_modules` excluded).
 4. Installs Python 3.13 with uv and the locked `requirements.txt` into `/opt/cardiosensai/venv`.
-5. Creates the database and role (password generated once), writes `backend.env` (secrets generated once, `API_BASE_URL`/`WEB_BASE_URL`, mode-specific SMS/email settings; an SMS provider set up with [`set_sms.sh`](#scriptsset_smssh) is kept).
+5. Creates the database and role (password generated once), writes `backend.env` (secrets generated once, `API_BASE_URL`/`WEB_BASE_URL`, mode-specific SMS/email settings; MSG91 set up with [`setup_msg91.sh`](#scriptssetup_msg91sh) is kept).
 6. **If a migration is pending:** saves `pg_dump` to `/var/backups/cardiosensai/pre-migrate-<time>.dump`, then runs `alembic upgrade head`; then the seed (device models, `--admin*`, `--demo-data`).
 7. Installs and restarts the sandboxed systemd service `cardiosensai-api` (uvicorn on 127.0.0.1:8000, access log off).
 8. Runs [`nginx.sh`](#scriptsnginxsh) (site + certificate).
@@ -233,25 +233,33 @@ sudo bash scripts/set_smtp.sh --test you@example.com                          # 
 
 If the test fails, the reason from Google is printed: `535 … Username and Password not accepted` = not an app password / 2-Step Verification off; a timeout = port 587 blocked (try `--tls ssl`, port 465); `550 … Invalid credentials for relay` = server IP not allowed for the relay yet. After setting up email, run `sudo bash scripts/deploy.sh` again if a deploy stopped at the SMTP check or ran with `--no-email`.
 
-### `scripts/set_sms.sh`
+### `scripts/setup_msg91.sh`
 
-Sets up SMS for one-time codes on the server, then sends a test code. **Production needs it: sign-up sends a code to the mobile number**, so until an SMS provider is configured nobody can sign up (sign-in by email code, password or Google still works). Secrets are asked for with hidden input.
+Sets up **MSG91** for mobile-number one-time codes on the server, then sends a test code. **Production needs it: sign-up confirms the mobile number by SMS.** Until MSG91 is set up (or while it is down) sign-up only works with an email address and the number stays unconfirmed until the person confirms it later; sign-in by email code, password or Google still works. The auth key is asked for with hidden input (or taken from `MSG91_AUTH_KEY` in the environment) and is never printed.
 
 ```bash
-sudo bash scripts/set_sms.sh --provider msg91 --template <DLT_TEMPLATE_ID> --test +919812345678     # India (DLT)
-sudo bash scripts/set_sms.sh --provider twilio --sid AC... --from MG... --test +15551234567         # Twilio
-sudo bash scripts/set_sms.sh --test +919812345678                                                   # test current settings
+sudo bash scripts/setup_msg91.sh --template <OTP_TEMPLATE_ID> --test +919812345678     # first setup (asks for the auth key)
+sudo bash scripts/setup_msg91.sh --notice-template <TEMPLATE_ID>                       # add or change a template, keep the saved key
+sudo bash scripts/setup_msg91.sh --new-key                                             # rotate the auth key
+sudo bash scripts/setup_msg91.sh --test +919812345678                                  # test the current settings
+sudo bash scripts/setup_msg91.sh --show                                                # current settings, key masked
+sudo bash scripts/setup_msg91.sh --off                                                 # SMS_PROVIDER=none
 ```
 
 | Option | What it does |
 |---|---|
-| `--provider msg91\|twilio\|none` | SMS provider (`none` switches SMS off) |
-| `--template ID` | MSG91: the DLT-registered OTP template; its text must contain `##OTP##`, e.g. "##OTP## is your CardiosensAI code. It expires in 10 minutes. Don't share it with anyone." |
-| `--notice-template ID` | MSG91, optional: template for "this number already has an account" (sent instead of a code when someone signs up with a registered number; skipped without it) |
-| `--sid SID`, `--from SENDER` | Twilio: account SID, and a sender number or Messaging Service SID |
+| `--template ID` | The MSG91 OTP template id (24 hex characters), DLT-approved; its text must contain `##OTP##`, e.g. "##OTP## is your CardiosensAI code. It expires in 10 minutes. Don't share it with anyone." Required the first time |
+| `--notice-template ID` | Optional template without variables for "this number already has an account" (sent instead of a code when someone signs up with a registered number; skipped without it). `""` removes it |
+| `--new-key` | Ask for a new auth key even if one is saved (otherwise the saved key is kept) |
 | `--test NUMBER` | Send a test code (`app/scripts/test_sms.py`, as the service account) |
+| `--show` | Print `SMS_PROVIDER` and the `MSG91_*` settings with the key masked |
+| `--off` | Switch SMS off (`SMS_PROVIDER=none`): sign-up continues with the email code only (no email → 503), SMS sign-in answers 503 pointing to email or password |
 
-India: SMS needs a registered DLT entity, sender ID (header) and template. MSG91, Twilio and others help with the registration; approval takes a few days. Writes `SMS_PROVIDER` and `MSG91_*` / `TWILIO_*` in `backend.env` and restarts the API.
+**Before running it (India):** SMS needs a registered DLT entity, a sender ID (header) and a DLT-approved template; approval takes a few days. In MSG91: link the DLT entity and sender ID, create the OTP template (MSG91 → OTP → Templates) and copy its id, then create an auth key (MSG91 → API → Auth Key; whitelist the server's IP if you turn on IP security). A failed test prints MSG91's own reason (wrong key, unknown template, DLT mismatch, IP not whitelisted, no balance).
+
+**How codes flow:** sign-up sends a code to the mobile number and the email (both needed); sign-in sends one to what was typed and one to the account's other confirmed contact (either works). For every SMS code the server makes the 6-digit code, stores only its HMAC (`otp_challenges`) and sends it through MSG91's OTP API (`POST /api/v5/otp?template_id=…&mobile=…&otp=…&otp_length=6&otp_expiry=10`); MSG91 only delivers it. Checking the code (expiry, 5 tries, single use) stays on the server, the same as for email codes, so SMS and email codes behave identically. MSG91 reports most failures as HTTP 200 with `{"type": "error"}`, which the server treats as not sent (503 for codes, logged and skipped for notices).
+
+Writes `SMS_PROVIDER=msg91` and `MSG91_AUTH_KEY`, `MSG91_OTP_TEMPLATE_ID`, `MSG91_NOTICE_TEMPLATE_ID` in `backend.env` (other settings kept; leftover `TWILIO_*` lines from older versions are removed), and restarts the API. MSG91 is the only SMS provider; Twilio support was removed (a server still on `SMS_PROVIDER=twilio` is switched to `none` by the next `deploy.sh` until this script is run).
 
 ### Google sign-in
 
@@ -324,7 +332,7 @@ journalctl -u cardiosensai-purge -n 20                       # what the last run
 
 ### `app/scripts/test_sms.py`
 
-Sends one test sign-in code by SMS with the configured provider. `set_sms.sh --test` runs it on the server; locally: `.venv/bin/python -m app.scripts.test_sms +919812345678` (console provider: logged).
+Sends one test sign-in code by SMS through MSG91 (exit code 0 = MSG91 accepted it). `setup_msg91.sh --test` runs it on the server; locally: `.venv/bin/python -m app.scripts.test_sms +919812345678` (console provider: logged).
 
 ### `app/scripts/test_email.py`
 
@@ -419,7 +427,7 @@ cd web && npm test && npm run typecheck
 
 \* Create the test database once: `docker exec cardiosens-local-pg createdb -U cardiosens cardiosens_test`. Tests wipe it.
 
-The 78 tests cover sign-up with SMS + email codes (no account until both are entered, no leaks, resend, phone-only sign-up, adding an email later), sign-in by email or SMS code and by password with email or mobile number, Google sign-up and sign-in (linking by verified email), SMS providers (MSG91, Twilio, none), the admin portal (licence uploads and who can open them, verify / reject with reason / resubmit / revoke, delete with grace period, restore, erase, the purge job, clinic erasure, user search and CSV export, statistics without health values), 12-lead uploads, live ECG streaming/viewing/saving and stall handling, document uploads (types, limits, permissions, comments, signed links), the dashboard summary, lockout, password reset and the web session cookie; 16-digit IDs; patient/doctor/clinic linking (approval, verification and two-step gates, clinic roster, requests on a doctor's behalf, ending a link); moving app accounts to email; SMS sign-in, refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, admin isolation from health data, ECG integrity, signed report links, account deletion and the web app serving. `cd web && npm test` checks the client-side ID validation.
+The 88 tests cover sign-up with SMS + email codes (no account until both are entered, no leaks, resend, phone-only sign-up, adding an email later), sign-in by email or SMS code and by password with email or mobile number, Google sign-up and sign-in (linking by verified email), SMS through MSG91 (request format, MSG91 error answers → 503, notice template, sign-up sending codes to both phone and email, sign-in codes to both the typed contact and the other confirmed one with either code working and both used up, no second code to an unconfirmed contact, MSG91 down on the second code), SMS outages (sign-up with the email code only, no email → 503, MSG91 failing mid-sign-up and on resend, the 5-minute down window, confirming the number later, an unconfirmed number not blocking its real owner, sign-in by number pointing to email or password and both working) and with SMS off, the admin portal (licence uploads and who can open them, verify / reject with reason / resubmit / revoke, delete with grace period, restore, erase, the purge job, clinic erasure, user search and CSV export, statistics without health values), 12-lead uploads, live ECG streaming/viewing/saving and stall handling, document uploads (types, limits, permissions, comments, signed links), the dashboard summary, lockout, password reset and the web session cookie; 16-digit IDs; patient/doctor/clinic linking (approval, verification and two-step gates, clinic roster, requests on a doctor's behalf, ending a link); moving app accounts to email; SMS sign-in, refresh-token theft detection, per-item ingestion outcomes, idempotency, pagination, sharing scope and history windows, revocation, grant expiry, admin isolation from health data, ECG integrity, signed report links, account deletion and the web app serving. `cd web && npm test` checks the client-side ID validation.
 
 Before merging a change that touches models, also run `alembic check` against a migrated PostgreSQL database (no output = models and migrations agree).
 
@@ -509,11 +517,13 @@ Errors always have the shape `{"error": {"code", "message"}}`. "Not found" is al
 | Path | Who | Flow |
 |---|---|---|
 | Sign-up | Everyone | `POST /v1/auth/register` (mobile number required, email optional, password unless Google) → 6-digit code by SMS, and by email if given → `POST /v1/auth/register/verify {signupId, phoneCode, emailCode}` creates the account (phone/email verified) and signs in. Nothing is stored as an account before that: the pending sign-up (password already hashed) waits on the code challenge. Same answer when the number or email is taken (its owner gets a notice instead of a code). `/register/resend` sends new codes |
-| Code sign-in | Everyone | `POST /v1/auth/login/start {identifier}` (email → code by email, mobile number → code by SMS; same answer for unknown addresses, no code sent) → `POST /v1/auth/login/verify {challengeId, code}`. A code also confirms that email or number on older accounts |
+| SMS down (sign-up) | Everyone | When MSG91 fails (or `SMS_PROVIDER=none`) SMS counts as down for 5 minutes (`sms.mark_down`; `/v1/auth/options` → `smsAvailable: false`), so requests don't wait on MSG91 meanwhile. `/register` **with an email**: no SMS is sent, the answer has `phoneCodeSent: false`, and `/register/verify` needs only `emailCode` (a Google sign-up then also gets an email code). The account keeps the number **unconfirmed** (`phone_verified_at` NULL, `phoneVerified: false` on `/me` and `/auth/status`, audit detail "SMS down: number not confirmed yet"); the person confirms it later with `POST /v1/me/contact/code {kind: phone}` → `/me/contact/verify` (the web shows a reminder on the home page and a **Confirm mobile number** button in Settings; the app a reminder on Home/Patients and a card on Profile/Account). If the SMS fails mid-sign-up or on `/register/resend`, the same switch happens. **Without an email**: 503 `sms_unavailable` asking for one. An unconfirmed number never blocks its real owner: a later sign-up or contact confirmation that proves the number by SMS takes it over (`accounts.release_unconfirmed_phone`, audited `account.phone_released`), and while SMS is down an already-saved number can't be saved again. The unconfirmed number doesn't limit the account (the confirmed email activates it) |
+| SMS down (sign-in) | Everyone | `/login/start` with a mobile number answers 503 `sms_unavailable`: "We can't send text messages right now. Sign in with your email address instead (we'll email you a code), or use your password." The web and app sign-in pages then offer **Sign in with password** (the code page in password-only mode) and **Use my email instead**. Email-code sign-in (no SMS second code while it's down) and password sign-in keep working |
+| Code sign-in | Everyone | `POST /v1/auth/login/start {identifier}`: email → code by email, mobile number → code by SMS (MSG91), **and a second code to the account's other contact if it is confirmed** (`phone_verified_at` / `email_verified_at`; an unconfirmed, possibly mistyped one never gets sign-in codes). Same answer for unknown addresses (no code sent), and the answer never shows the other contact. → `POST /v1/auth/login/verify {challengeId, code}` accepts **either code**: both challenges share one `group_id` and the primary's 5-try limit (`otp.check_any`), and a successful sign-in uses up both. If MSG91 fails on the second code the first still works; an SMS failure on the typed number answers 503. A code also confirms that email or number on older accounts |
 | Password | Accounts with a password | `POST /v1/auth/login {identifier, password}` (`email` still accepted from older app builds). Needs a confirmed number or email |
 | Google | Everyone | `POST /v1/auth/google {credential}` (Google ID token) → signed in, or 404 `no_account` → sign-up with the token (`googleCredential`) |
 | Two-step (TOTP) | Required for doctor, clinic, admin; optional for patients | Login returns `{mfaRequired, mfaToken}` (5 min) → `POST /v1/auth/mfa/verify` with the 6-digit code |
-| Codes in detail | — | 6 digits, 10 min, 5 tries each, single use; only an HMAC bound to the challenge and address is stored (`otp_challenges`). Rate limits per address and per IP. SMS through `SMS_PROVIDER` (MSG91 / Twilio), email through SMTP. Older app builds' `/otp/request` + `/otp/verify` (phone sign-in that creates a patient) still work |
+| Codes in detail | — | 6 digits, 10 min, 5 tries each, single use; only an HMAC bound to the challenge and address is stored (`otp_challenges`). Rate limits per address and per IP. SMS through MSG91 (`SMS_PROVIDER=msg91`, the server makes the code and MSG91 delivers it), email through SMTP. Older app builds' `/otp/request` + `/otp/verify` (phone sign-in that creates a patient) still work |
 | Password reset | Everyone | `POST /v1/auth/password/forgot` (always 204) → emailed link → `POST /v1/auth/password/reset` (ends every session) |
 
 | Credential | Lifetime | Storage |
@@ -801,7 +811,7 @@ All settings are environment variables (`app/core/config.py`; locally `.env`, se
 | `WEB_BASE_URL` | `http://localhost:5173` | Base of links in emails (verify, reset). Same host as the API in production |
 | `EMAIL_PROVIDER` | `console` | `console` (log only), `smtp`, `none` |
 | `EMAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD` | — / `587` / `starttls` | SMTP relay (Zoho, Google Workspace, Amazon SES SMTP, Brevo...). `SMTP_TLS`: `starttls`, `ssl`, `none` |
-| `SMS_PROVIDER` | `console` | One-time codes by SMS: `msg91` (`MSG91_AUTH_KEY`, `MSG91_OTP_TEMPLATE_ID`, optional `MSG91_NOTICE_TEMPLATE_ID`), `twilio` (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`), `console` (log), `none` (sign-up and SMS sign-in answer 503 `sms_unavailable`). Set with [`set_sms.sh`](#scriptsset_smssh) |
+| `SMS_PROVIDER` | `console` | One-time codes by SMS: `msg91` (`MSG91_AUTH_KEY`, `MSG91_OTP_TEMPLATE_ID`, optional `MSG91_NOTICE_TEMPLATE_ID`), `console` (log), `none` (sign-up needs an email and leaves the number unconfirmed; SMS sign-in answers 503 `sms_unavailable`). Set with [`setup_msg91.sh`](#scriptssetup_msg91sh) |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_EXTRA_CLIENT_IDS` | empty | [Google sign-in](#google-sign-in): the web OAuth client id; app client ids (JSON list). Empty: no Google button |
 | `DEV_EXPOSE_OTP` | `false` | Development only: return one-time codes in API responses (the pages show them) |
 | `STORAGE_BACKEND`, `STORAGE_LOCAL_PATH`, `S3_*` | `local`, `./var/storage` | Where ECG waveforms and PDFs go |
@@ -855,7 +865,7 @@ All `deploy.sh` options, what it does step by step, and the companion scripts `n
    git clone https://github.com/mazumdersayon-del/cardiosensAI_backend.git
    cd cardiosensAI_backend
    ```
-3. **SMS and email:** sign-up sends a code by SMS, so set up SMS once with [`set_sms.sh`](#scriptsset_smssh) (DLT template in India). Production also refuses to run without an SMTP relay (email codes and password reset depend on it). Optionally [Google sign-in](#google-sign-in). `cardiosens.ai` mail is on Google Workspace: create an [app password](#scriptsset_smtpsh) for the sending mailbox, then
+3. **SMS and email:** sign-up sends a code by SMS, so set up MSG91 once with [`setup_msg91.sh`](#scriptssetup_msg91sh) (DLT template in India). Production also refuses to run without an SMTP relay (email codes and password reset depend on it). Optionally [Google sign-in](#google-sign-in). `cardiosens.ai` mail is on Google Workspace: create an [app password](#scriptsset_smtpsh) for the sending mailbox, then
    ```bash
    sudo bash scripts/set_smtp.sh --user no-reply@cardiosens.ai --no-test   # asks for the app password (hidden)
    ```
@@ -938,7 +948,7 @@ Production (`deploy.sh`, `Dockerfile`) installs only `requirements.txt`. Develop
 
 ## Before production
 
-- **SMS provider:** register the DLT entity, sender ID and OTP template, then run [`set_sms.sh`](#scriptsset_smssh). Sign-up can't work without it.
+- **SMS (MSG91):** register the DLT entity, sender ID and OTP template, then run [`setup_msg91.sh`](#scriptssetup_msg91sh). Without it, sign-up needs an email and mobile numbers stay unconfirmed.
 - **Google sign-in:** create the OAuth client ids and set `GOOGLE_CLIENT_ID` (+ app ids), see [Google sign-in](#google-sign-in).
 - **Verification evidence:** doctors and clinics give registration numbers only; staff check them against the council or state register by hand. Add document upload and a record of what was checked.
 - **CI:** this repository has no CI pipeline yet. Add one that runs ruff, pytest on PostgreSQL, `alembic upgrade head` + `alembic check` + downgrade, and `cd web && npm ci && npm test && npm run build` with a check that `website/` is up to date.
@@ -968,7 +978,7 @@ app/
   core/                  config (+ production guards), db, security, ids, passwords (+ common_passwords.txt), errors, storage, ratelimit, observability
   models/                user (users, organizations, professional_profiles, consents, verification_files), link, sharing, auth, device, health, report, notification, audit
   schemas/               request/response models (camelCase)
-  services/              authz, accounts, erasure (scheduled deletion, erase, purge), stats (admin statistics), otp (one-time codes), google (ID-token check), ecg (leads, live state, finalize), ecg_synth, ingestion, report_pdf, audit, notifications, email, sms (MSG91 / Twilio), serializers
+  services/              authz, accounts, erasure (scheduled deletion, erase, purge), stats (admin statistics), otp (one-time codes), google (ID-token check), ecg (leads, live state, finalize), ecg_synth, ingestion, report_pdf, audit, notifications, email, sms (MSG91), serializers
   scripts/seed.py        device models, admin by phone or email, demo data (incl. a 12-lead ECG)
   scripts/simulate_ecg.py  streams a synthetic 12-lead live ECG through the public API
   scripts/purge_deleted.py erases accounts whose 30-day deletion grace period is over (daily timer)
@@ -985,7 +995,7 @@ scripts/
   nginx.sh               nginx + Let's Encrypt (run by deploy.sh, or on its own)
   update_ssl.sh          create / check / renew the HTTPS certificate
   set_smtp.sh            outgoing email (SMTP) settings + test email
-  set_sms.sh             SMS provider (MSG91 / Twilio) settings + test code
+  setup_msg91.sh         MSG91 settings for SMS codes + test code
 Dockerfile, docker-compose.yml   container image and a local compose stack
 pyproject.toml           project metadata, direct dependencies, ruff and pytest settings
 requirements.txt         generated runtime lock

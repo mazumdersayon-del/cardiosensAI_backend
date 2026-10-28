@@ -5,6 +5,18 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { Banner, errorText } from './ui';
 
+/** Shown while the mobile number saved at sign-up (SMS was down then) still needs its code. */
+export function PhoneReminder() {
+  const { user } = useAuth();
+  if (!user?.phone || user.phoneVerified) return null;
+  return (
+    <Banner kind="info">
+      Your mobile number <span className="mono">{user.phone}</span> isn’t confirmed yet: we couldn’t send a text message when you signed up.{' '}
+      <RouterLink to="/settings">Confirm it in Settings</RouterLink> to also sign in with SMS codes.
+    </Banner>
+  );
+}
+
 /** Doctors, clinics and staff: what is left before they can see patient data. */
 export function SetupChecklist() {
   const { status } = useAuth();

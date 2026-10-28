@@ -7,7 +7,7 @@ import EcgPanel, { LiveEcg } from '../components/Ecg';
 import IdCard from '../components/IdCard';
 import { LinkRequestBox, useLinks } from '../components/Links';
 import ReportsPanel from '../components/Reports';
-import { SetupChecklist } from '../components/Setup';
+import { PhoneReminder, SetupChecklist } from '../components/Setup';
 import { Banner, useLoad } from '../components/ui';
 import { History, LatestVitals } from '../components/Vitals';
 import { ago, day, formatId, when } from '../format';
@@ -50,6 +50,7 @@ export function ProDashboard() {
   const liveCount = (patients ?? []).filter((p) => p.ecgLive).length;
   return (
     <div className="stack" style={{ gap: 16 }}>
+      <PhoneReminder />
       <SetupChecklist />
       {waiting > 0 && (
         <Banner kind="info">

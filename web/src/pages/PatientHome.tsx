@@ -6,6 +6,7 @@ import EcgPanel, { LiveEcg } from '../components/Ecg';
 import IdCard from '../components/IdCard';
 import { LinksTable, useLinks } from '../components/Links';
 import ReportsPanel from '../components/Reports';
+import { PhoneReminder } from '../components/Setup';
 import { Banner } from '../components/ui';
 import { History, LatestVitals } from '../components/Vitals';
 import { day } from '../format';
@@ -23,6 +24,11 @@ export default function PatientHome() {
       <div className="span-12">
         <IdCard uid={user.uniqueId} name={user.fullName} role="patient" extra={[user.patientCode && `Report code ${user.patientCode}`, user.dateOfBirth && `Born ${day(user.dateOfBirth)}`].filter(Boolean).join(' · ')} />
       </div>
+      {user.phone && !user.phoneVerified && (
+        <div className="span-12">
+          <PhoneReminder />
+        </div>
+      )}
       {waiting.length > 0 && (
         <div className="span-12">
           <Banner kind="info">

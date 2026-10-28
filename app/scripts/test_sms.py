@@ -1,10 +1,10 @@
-"""Send one test code by SMS with the configured provider, to check the SMS settings.
+"""Send one test code by SMS through MSG91, to check the SMS settings.
 
     python -m app.scripts.test_sms +919812345678
 
-Uses the same settings as the API (SMS_PROVIDER, TWILIO_* or MSG91_*). The message is a normal sign-in code
-text with a random code that unlocks nothing. Exit code 0 = the provider accepted it.
-`scripts/set_sms.sh` runs it on the server as the service account.
+Uses the same settings as the API (SMS_PROVIDER, MSG91_*). The message is a normal sign-in code
+text with a random code that unlocks nothing. Exit code 0 = MSG91 accepted it.
+`scripts/setup_msg91.sh --test` runs it on the server as the service account.
 """
 
 import argparse
@@ -27,7 +27,7 @@ def main() -> int:
     s = get_settings()
     print(f"Provider: {s.sms_provider}")
     if s.sms_provider == "none":
-        print("SMS_PROVIDER=none: nothing is sent. Run scripts/set_sms.sh first.", file=sys.stderr)
+        print("SMS_PROVIDER=none: nothing is sent. Run scripts/setup_msg91.sh first.", file=sys.stderr)
         return 1
     try:
         send_otp(args.to, new_otp())

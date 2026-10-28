@@ -38,7 +38,7 @@
 #   --email ADDRESS           Let's Encrypt account e-mail; running with it accepts the Let's Encrypt terms [LETSENCRYPT_EMAIL]
 #   --mode production|demo    production (default): production settings. Needs the SMTP settings above
 #                             (refuses to run without them). Sign-up sends an SMS code, so also configure an
-#                             SMS provider once: sudo bash scripts/set_sms.sh (until then nobody can sign up).
+#                             MSG91 once: sudo bash scripts/setup_msg91.sh (until then sign-up needs an email).
 #                             demo: one-time codes are returned in the API response (anyone can sign in as any
 #                             number) and emails go to the service log. Test data only, never real patients. [MODE]
 #   --admin-email ADDRESS     Create or promote this email to a staff (admin) account and email it a
@@ -272,8 +272,8 @@ kv_set STORAGE_LOCAL_PATH $DATA_DIR/storage $ENV_FILE
 if [[ $MODE == production ]]; then
   kv_set ENV production $ENV_FILE
   kv_set DEV_EXPOSE_OTP false $ENV_FILE
-  # Keep a provider set up with set_sms.sh; otherwise none (sign-up and SMS sign-in then answer 503).
-  [[ $(kv_get SMS_PROVIDER $ENV_FILE) =~ ^(twilio|msg91)$ ]] || kv_set SMS_PROVIDER none $ENV_FILE
+  # Keep MSG91 set up with setup_msg91.sh; otherwise none (sign-up and SMS sign-in then answer 503).
+  [[ $(kv_get SMS_PROVIDER $ENV_FILE) == msg91 ]] || kv_set SMS_PROVIDER none $ENV_FILE
   kv_set EMAIL_PROVIDER "$EMAIL_MODE" $ENV_FILE
 else
   kv_set ENV development $ENV_FILE
@@ -492,8 +492,8 @@ if [[ $MODE == demo ]]; then
   warn "Demo mode: sign-in codes are visible to anyone, emails go to the log (journalctl -u $SERVICE). Test data only."
 else
   [[ $EMAIL_MODE == none ]] && warn "No email relay: email codes and password-reset links can't be sent. Add SMTP_* to $ENV_FILE and run this script again."
-  [[ $(kv_get SMS_PROVIDER $ENV_FILE) =~ ^(twilio|msg91)$ ]] ||
-    warn "No SMS provider yet: nobody can sign up (sign-up sends a code to the mobile number). Run: sudo bash scripts/set_sms.sh --provider msg91 (or twilio)"
+  [[ $(kv_get SMS_PROVIDER $ENV_FILE) == msg91 ]] ||
+    warn "No SMS provider yet: sign-up only works with an email address (mobile numbers stay unconfirmed) and SMS sign-in is off. Run: sudo bash scripts/setup_msg91.sh --template ID --test +91XXXXXXXXXX"
   [[ -n $(kv_get GOOGLE_CLIENT_ID $ENV_FILE) ]] ||
     echo "Optional: \"Continue with Google\" appears once GOOGLE_CLIENT_ID is set in $ENV_FILE (see README → Google sign-in)."
 fi

@@ -85,6 +85,27 @@ def is_activated(user: User) -> bool:
     return user.phone_verified_at is not None or user.email_verified_at is not None
 
 
+def phone_holder(db: Session, phone: str, *, confirmed_only: bool = False, exclude: uuid.UUID | None = None) -> User | None:
+    """The account using this mobile number. A number saved while SMS was down stays unconfirmed until its code is entered."""
+    stmt = select(User).where(User.phone == phone)
+    if confirmed_only:
+        stmt = stmt.where(User.phone_verified_at.is_not(None))
+    if exclude is not None:
+        stmt = stmt.where(User.id != exclude)
+    return db.scalar(stmt)
+
+
+def release_unconfirmed_phone(db: Session, phone: str, exclude: uuid.UUID | None = None) -> User | None:
+    """Someone just proved this number with an SMS code: take it off an account that only saved it unconfirmed (e.g. a
+    sign-up during an SMS outage that typed someone else's number). Returns that account, if any."""
+    holder = phone_holder(db, phone, exclude=exclude)
+    if holder is None or holder.phone_verified_at is not None:
+        return None
+    holder.phone = None
+    db.flush()
+    return holder
+
+
 def account_status(db: Session, user: User) -> AccountStatusOut:
     missing: list[str] = []
     email_ok = user.email_verified_at is not None
@@ -106,6 +127,7 @@ def account_status(db: Session, user: User) -> AccountStatusOut:
         role=user.role,
         unique_id=user.unique_id,
         email_verified=email_ok,
+        phone_verified=user.phone_verified_at is not None,
         mfa_enabled=user.mfa_enabled,
         mfa_required=professional or user.role == "admin",
         verification_status=vstatus,

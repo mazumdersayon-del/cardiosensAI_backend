@@ -128,6 +128,7 @@ export function LoginPage() {
   const nav = useNavigate();
   const [who, setWho] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [smsDown, setSmsDown] = useState<string | null>(null); // the number typed while text messages are down
   const [busy, setBusy] = useState(false);
   const google = useGoogleSignIn(setErr);
   if (google.mfa) return <MfaStep mfaToken={google.mfa.mfaToken} onBack={google.clearMfa} />;
@@ -135,6 +136,7 @@ export function LoginPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
+    setSmsDown(null);
     const id = parseIdentifier(who);
     if ('error' in id) return setErr(id.error);
     setBusy(true);
@@ -143,6 +145,7 @@ export function LoginPage() {
       nav('/login/code', { state: { started, identifier: id.value } });
     } catch (ex) {
       setErr(errorText(ex));
+      if (ex instanceof ApiError && ex.code === 'sms_unavailable') setSmsDown(id.value);
     } finally {
       setBusy(false);
     }
@@ -156,6 +159,16 @@ export function LoginPage() {
           <input autoComplete="username" inputMode="email" value={who} onChange={(e) => setWho(e.target.value)} required autoFocus />
         </label>
         {err && <Banner kind="error">{err}</Banner>}
+        {smsDown && (
+          <div className="row">
+            <button type="button" className="btn ghost small" onClick={() => nav('/login/code', { state: { identifier: smsDown, passwordOnly: true } })}>
+              Sign in with password
+            </button>
+            <button type="button" className="btn ghost small" onClick={() => (setWho(''), setErr(null), setSmsDown(null))}>
+              Use my email instead
+            </button>
+          </div>
+        )}
         <button type="submit" className="btn primary" disabled={busy}>
           {busy ? 'Sending a code…' : 'Continue'}
         </button>
@@ -174,10 +187,11 @@ export function LoginPage() {
 export function LoginCodePage() {
   const { signIn } = useAuth();
   const nav = useNavigate();
-  const loc = useLocation() as { state?: { started?: LoginStarted; identifier?: string } };
+  // passwordOnly: text messages were down for a mobile number, so there is no code challenge, only the password
+  const loc = useLocation() as { state?: { started?: LoginStarted; identifier?: string; passwordOnly?: boolean } };
   const [started, setStarted] = useState<LoginStarted | undefined>(loc.state?.started);
   const identifier = loc.state?.identifier ?? '';
-  const [mode, setMode] = useState<'code' | 'password'>('code');
+  const [mode, setMode] = useState<'code' | 'password'>(loc.state?.passwordOnly ? 'password' : 'code');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [mfa, setMfa] = useState<MfaRequired | null>(null);
@@ -185,7 +199,7 @@ export function LoginCodePage() {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (!started || !identifier)
+  if (!identifier || (!started && mode === 'code'))
     return (
       <AuthShell title="Sign in">
         <Banner kind="info">Start by entering your email or mobile number.</Banner>
@@ -196,7 +210,7 @@ export function LoginCodePage() {
     );
   if (mfa) return <MfaStep mfaToken={mfa.mfaToken} onBack={() => nav('/', { replace: true })} />;
 
-  const viaSms = started.channel === 'sms';
+  const viaSms = started?.channel === 'sms';
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -219,13 +233,14 @@ export function LoginCodePage() {
     <AuthShell
       title={mode === 'code' ? 'Enter your code' : 'Enter your password'}
       sub={
-        mode === 'code' ? (
+        mode === 'code' && started ? (
           <>
-            We sent a 6-digit code {viaSms ? 'by SMS to' : 'to'} <strong>{started.destinationMasked}</strong>. It expires in {Math.round(started.expiresInS / 60)} minutes.
+            We sent a 6-digit code {viaSms ? 'by SMS to' : 'to'} <strong>{started.destinationMasked}</strong>, and another to your account&apos;s confirmed{' '}
+            {viaSms ? 'email' : 'mobile number'} if it has one. Either code works; they expire in {Math.round(started.expiresInS / 60)} minutes.
           </>
         ) : (
           <>
-            Signing in as <strong>{started.destinationMasked}</strong>
+            Signing in as <strong>{started?.destinationMasked ?? identifier}</strong>
           </>
         )
       }
@@ -233,8 +248,13 @@ export function LoginCodePage() {
       <form className="stack" onSubmit={submit}>
         {mode === 'code' ? (
           <>
-            <CodeField label={viaSms ? 'Code from the SMS' : 'Code from the email'} value={code} onChange={setCode} autoFocus />
-            {started.devCode && <small className="muted">Development: the code is {started.devCode}</small>}
+            <CodeField label="Code from the SMS or the email" value={code} onChange={setCode} autoFocus />
+            {started?.devCode && (
+              <small className="muted">
+                Development: the code is {started.devCode}
+                {started.devOtherCode && ` (or ${started.devOtherCode})`}
+              </small>
+            )}
           </>
         ) : (
           <label className="field">
@@ -263,7 +283,7 @@ export function LoginCodePage() {
                 try {
                   setStarted(await api<LoginStarted>('POST', '/v1/auth/login/start', { identifier }));
                   setCode('');
-                  setNote('A new code is on its way.');
+                  setNote('New codes are on their way.');
                 } catch (ex) {
                   setErr(errorText(ex));
                 }
@@ -274,9 +294,13 @@ export function LoginCodePage() {
           </>
         ) : (
           <>
-            <button type="button" className="linklike" onClick={() => (setMode('code'), setErr(null))}>
-              Use a one-time code instead
-            </button>
+            {started ? (
+              <button type="button" className="linklike" onClick={() => (setMode('code'), setErr(null))}>
+                Use a one-time code instead
+              </button>
+            ) : (
+              <Link to="/">Get a code by email instead</Link>
+            )}
             <Link to="/forgot-password">Forgot password?</Link>
           </>
         )}
@@ -428,22 +452,35 @@ export function RegisterCodePage() {
       </AuthShell>
     );
   const needEmail = !!started.emailMasked;
+  const needPhone = started.phoneCodeSent !== false;
   return (
     <AuthShell
       title="Activate your account"
       sub={
-        <>
-          Enter the code we sent by SMS to <strong>{started.phoneMasked}</strong>
-          {needEmail && (
-            <>
-              {' '}
-              and the one we emailed to <strong>{started.emailMasked}</strong>
-            </>
-          )}
-          .
-        </>
+        needPhone ? (
+          <>
+            Enter the code we sent by SMS to <strong>{started.phoneMasked}</strong>
+            {needEmail && (
+              <>
+                {' '}
+                and the one we emailed to <strong>{started.emailMasked}</strong>
+              </>
+            )}
+            .
+          </>
+        ) : (
+          <>
+            Enter the code we emailed to <strong>{started.emailMasked}</strong>.
+          </>
+        )
       }
     >
+      {!needPhone && (
+        <Banner kind="info">
+          We can’t send text messages right now, so your mobile number <strong>{started.phoneMasked}</strong> will be confirmed later. Once text
+          messages work again, confirm it in Settings (you’ll be reminded on your home page).
+        </Banner>
+      )}
       <form
         className="stack"
         onSubmit={async (e) => {
@@ -451,7 +488,7 @@ export function RegisterCodePage() {
           setBusy(true);
           setErr(null);
           try {
-            await signIn('/v1/auth/register/verify', { signupId: started.signupId, phoneCode, emailCode: needEmail ? emailCode : null });
+            await signIn('/v1/auth/register/verify', { signupId: started.signupId, phoneCode: needPhone ? phoneCode : null, emailCode: needEmail ? emailCode : null });
             nav('/', { replace: true });
           } catch (ex) {
             setErr(errorText(ex));
@@ -460,17 +497,21 @@ export function RegisterCodePage() {
           }
         }}
       >
-        <CodeField label="Code from the SMS" value={phoneCode} onChange={setPhoneCode} autoFocus />
-        {started.devPhoneCode && <small className="muted">Development: SMS code {started.devPhoneCode}</small>}
+        {needPhone && (
+          <>
+            <CodeField label="Code from the SMS" value={phoneCode} onChange={setPhoneCode} autoFocus />
+            {started.devPhoneCode && <small className="muted">Development: SMS code {started.devPhoneCode}</small>}
+          </>
+        )}
         {needEmail && (
           <>
-            <CodeField label="Code from the email" value={emailCode} onChange={setEmailCode} />
+            <CodeField label="Code from the email" value={emailCode} onChange={setEmailCode} autoFocus={!needPhone} />
             {started.devEmailCode && <small className="muted">Development: email code {started.devEmailCode}</small>}
           </>
         )}
         {err && <Banner kind="error">{err}</Banner>}
         {note && <Banner kind="ok">{note}</Banner>}
-        <button type="submit" className="btn primary" disabled={busy || phoneCode.length !== 6 || (needEmail && emailCode.length !== 6)}>
+        <button type="submit" className="btn primary" disabled={busy || (needPhone && phoneCode.length !== 6) || (needEmail && emailCode.length !== 6)}>
           {busy ? 'Activating…' : 'Activate and sign in'}
         </button>
       </form>

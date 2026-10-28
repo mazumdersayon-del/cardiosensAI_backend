@@ -47,6 +47,9 @@ def _clean():
     db.commit()
     db.close()
     limiter.reset()
+    from app.services import sms
+
+    sms.reset()
     from app.services import email
 
     email.outbox.clear()

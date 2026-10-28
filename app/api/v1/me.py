@@ -38,6 +38,7 @@ from app.schemas.auth import (
     UserUpdateIn,
 )
 from app.services import audit, otp, sms
+from app.services.accounts import phone_holder, release_unconfirmed_phone
 from app.services.email import mask_email
 from app.services.erasure import erase_account
 from app.services.serializers import device_out, ecg_out, grant_out, measurement_out, organization_out, user_out
@@ -72,11 +73,16 @@ def update_me(body: UserUpdateIn, user: User = Depends(get_current_user), db: Se
     return user_out(user)
 
 
-@router.post("/contact/code", response_model=ContactCodeOut, summary="Add a mobile number or email to this account: sends a code to it")
+@router.post(
+    "/contact/code",
+    response_model=ContactCodeOut,
+    summary="Add a mobile number or email, or confirm a mobile number saved while SMS was down: sends a code to it",
+)
 def contact_code(
     body: ContactCodeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db), meta: RequestMeta = Depends(request_meta)
 ) -> ContactCodeOut:
-    """Only while the account has none: the sign-in email and mobile number aren't changed here (CardiosensAI support does that)."""
+    """Only while the account has none, or (mobile) has one that was never confirmed: a sign-up while SMS was down keeps the
+    number unconfirmed, and it is confirmed (or corrected) here. Confirmed contacts aren't changed here (support does that)."""
     s = get_settings()
     limiter.hit(f"contact-code:{user.id}", 5, 3600)
     if body.kind == "email":
@@ -93,11 +99,11 @@ def contact_code(
         value = body.value.replace(" ", "").replace("-", "")
         if not re.fullmatch(E164, value):
             raise bad_request("invalid_phone", "Enter the mobile number with its country code")
-        if user.phone is not None:
+        if user.phone is not None and user.phone_verified_at is not None:
             raise bad_request("phone_locked", "Your mobile number can't be changed here. Contact CardiosensAI support")
         if not sms.available():
             raise sms.UNAVAILABLE
-        if db.scalar(select(User.id).where(User.phone == value)) is not None:
+        if phone_holder(db, value, confirmed_only=True, exclude=user.id) is not None:
             raise conflict("phone_taken", "This mobile number can't be used")
         ch, code = otp.create(db, channel="sms", purpose="add_phone", phone=value, user_id=user.id)
         masked = sms.mask_phone(value)
@@ -119,8 +125,11 @@ def contact_verify(
             raise conflict("email_taken", "This email address can't be used")
         user.email, user.email_verified_at = ch.email, now
     else:
-        if user.phone is not None or db.scalar(select(User.id).where(User.phone == ch.phone)) is not None:
+        if user.phone_verified_at is not None or phone_holder(db, ch.phone, confirmed_only=True, exclude=user.id) is not None:
             raise conflict("phone_taken", "This mobile number can't be used")
+        released = release_unconfirmed_phone(db, ch.phone, exclude=user.id)  # the SMS code proves it is this person's
+        if released is not None:
+            audit.record(db, actor=released, action="account.phone_released", detail="number confirmed by another account", meta=meta)
         user.phone, user.phone_verified_at = ch.phone, now
     ch.consumed_at = now
     audit.record(db, actor=user, action=f"account.{ch.purpose}", meta=meta)

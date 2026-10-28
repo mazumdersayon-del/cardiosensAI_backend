@@ -29,10 +29,8 @@ class Settings(BaseSettings):
     # Development convenience: return the OTP in the API response. Refused outside development/test.
     dev_expose_otp: bool = False
     # One-time codes by SMS (sign-up needs a mobile number, sign-in can use it). India: DLT-registered sender + template.
-    sms_provider: Literal["console", "none", "twilio", "msg91"] = "console"
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_from: str = ""  # sender number (+1...) or a Messaging Service SID (MG...)
+    # Set up on the server with scripts/setup_msg91.sh.
+    sms_provider: Literal["console", "none", "msg91"] = "console"
     msg91_auth_key: str = ""
     msg91_otp_template_id: str = ""  # DLT template with ##OTP##
     msg91_notice_template_id: str = ""  # optional: "this number already has an account" notice
@@ -103,8 +101,6 @@ class Settings(BaseSettings):
                 problems.append("DEV_EXPOSE_OTP must be false")
             if self.sms_provider == "console":
                 problems.append("SMS_PROVIDER must be a real provider (console only logs codes)")
-            if self.sms_provider == "twilio" and not (self.twilio_account_sid and self.twilio_auth_token and self.twilio_from):
-                problems.append("TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM are required when SMS_PROVIDER=twilio")
             if self.sms_provider == "msg91" and not (self.msg91_auth_key and self.msg91_otp_template_id):
                 problems.append("MSG91_AUTH_KEY and MSG91_OTP_TEMPLATE_ID are required when SMS_PROVIDER=msg91")
             if self.email_provider == "console":

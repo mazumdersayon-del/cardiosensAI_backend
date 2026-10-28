@@ -460,6 +460,8 @@ export interface SignupStarted {
   signupId: string;
   phoneMasked: string;
   emailMasked: string | null;
+  /** False while text messages are down: only the email code is needed; the number is confirmed later in Settings. */
+  phoneCodeSent?: boolean;
   expiresInS: number;
   devPhoneCode?: string | null;
   devEmailCode?: string | null;
@@ -471,6 +473,8 @@ export interface LoginStarted {
   destinationMasked: string;
   expiresInS: number;
   devCode?: string | null;
+  /** Development only: the second code, sent to the account's other confirmed email or mobile number. */
+  devOtherCode?: string | null;
 }
 
 let optionsPromise: Promise<AuthOptions> | null = null;

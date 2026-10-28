@@ -115,6 +115,10 @@ class SignupOut(CamelModel):
     signup_id: str
     phone_masked: str
     email_masked: str | None = Field(description="Set when a code was also sent to the email address")
+    phone_code_sent: bool = Field(
+        default=True,
+        description="False while SMS is down: only the email code is needed, and the number is confirmed later (me/contact/code)",
+    )
     expires_in_s: int
     dev_phone_code: str | None = Field(default=None, description="Only with DEV_EXPOSE_OTP (development)")
     dev_email_code: str | None = None
@@ -122,7 +126,7 @@ class SignupOut(CamelModel):
 
 class SignupVerifyIn(CamelModel):
     signup_id: str
-    phone_code: str = Field(pattern=CODE)
+    phone_code: str | None = Field(default=None, pattern=CODE, description="Required unless phoneCodeSent was false")
     email_code: str | None = Field(default=None, pattern=CODE, description="Required when the sign-up has an email address")
     web_session: bool = False
 
@@ -138,9 +142,10 @@ class LoginStartIn(CamelModel):
 class LoginStartOut(CamelModel):
     challenge_id: str
     channel: Literal["sms", "email"]
-    destination_masked: str
+    destination_masked: str = Field(description="Where the code was sent. A second code also goes to the account's other confirmed contact")
     expires_in_s: int
     dev_code: str | None = Field(default=None, description="Only with DEV_EXPOSE_OTP (development)")
+    dev_other_code: str | None = Field(default=None, description="Only with DEV_EXPOSE_OTP: the code sent to the other contact")
 
 
 class LoginCodeIn(CamelModel):
@@ -281,6 +286,7 @@ class AccountStatusOut(CamelModel):
     role: str
     unique_id: str | None
     email_verified: bool
+    phone_verified: bool = Field(default=False, description="False after a sign-up while SMS was down: confirm it with me/contact/code")
     mfa_enabled: bool
     mfa_required: bool
     verification_status: str | None = Field(description="Doctors and clinics: pending | verified | rejected | revoked | missing")
