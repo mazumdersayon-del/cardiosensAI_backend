@@ -134,3 +134,16 @@ def send_already_registered(phone: str) -> None:
         "Sign in instead. If this wasn't you, ignore this message."
     )
     _deliver(phone, "already_registered", text, get_settings().msg91_notice_template_id, {}, required=False)
+
+
+def send_appointment_reminder(phone: str, doctor: str, when: str) -> None:
+    """An accepted appointment starts soon (best effort; skipped until MSG91_REMINDER_TEMPLATE_ID is set)."""
+    text = f"Reminder: your CardiosensAI appointment with {doctor} is at {when}."
+    _deliver(
+        phone,
+        "appointment_reminder",
+        text,
+        get_settings().msg91_reminder_template_id,
+        {"doctor": doctor[:30], "time": when},
+        required=False,
+    )

@@ -13,7 +13,7 @@ import math
 import random
 import struct
 import uuid
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,9 +24,12 @@ from app.core.passwords import hash_password
 from app.core.storage import get_storage
 from app.models import (
     AccessGrant,
+    Appointment,
     CareLink,
     Device,
     DeviceModel,
+    DoctorOfflinePeriod,
+    DoctorSchedule,
     EcgRecording,
     FactoryDevice,
     Measurement,
@@ -34,7 +37,7 @@ from app.models import (
     ProfessionalProfile,
     User,
 )
-from app.services import device_hub, email
+from app.services import appointments, device_hub, email
 from app.services.accounts import allocate_unique_id, issue_action_token
 from app.services.ecg_synth import Synth12
 
@@ -237,6 +240,18 @@ DEMO_DOCTORS = (
 )
 
 
+# Practice PIN codes of the demo doctors (patients' "Near me"); filled once, also on databases seeded before.
+DEMO_DOCTOR_PINS = {
+    "+919800000002": "700020",
+    "+919800000009": "700016",
+    "+919800000010": "700091",
+    "+919800000011": "682016",
+    "+919800000012": "110001",
+    "+919800000013": "500001",
+    "+919800000014": "560001",
+}
+
+
 def seed_demo_doctors(db: Session, meera: User) -> None:
     now = utcnow()
     for i, (phone, name, specialty, degrees, years, languages, practice, city, about) in enumerate(DEMO_DOCTORS):
@@ -256,6 +271,127 @@ def seed_demo_doctors(db: Session, meera: User) -> None:
         if prof.degrees is None:  # fill once; a doctor's own edits are kept
             prof.listed, prof.specialty, prof.degrees, prof.experience_years = True, specialty, degrees, years
             prof.languages, prof.practice, prof.city, prof.about = languages, practice, city, about
+        if prof.pin_code is None:
+            prof.pin_code = DEMO_DOCTOR_PINS.get(phone)
+
+
+TEST_DOCTOR_PHONE = "+919800000009"
+TEST_DOCTOR_EMAIL = "testdoctor@demo.cardiosens.ai"
+
+
+def seed_test_doctor(db: Session, patient: User, family: User) -> User:
+    """Dr. Arjun Test (demo): a verified, listed doctor with weekly hours, an offline period and sample appointments
+    (requested / accepted / completed / no-show, online and in person) with the demo patients. Appointments are added once."""
+    now = utcnow()
+    doc = ensure_user(db, TEST_DOCTOR_PHONE, "doctor", "Dr. Arjun Test (demo)", email=TEST_DOCTOR_EMAIL)
+    if doc.mfa_secret is None:
+        doc.mfa_secret, doc.mfa_enabled = DEMO_TOTP_SECRET, True
+    if db.get(ProfessionalProfile, doc.id) is None:
+        db.add(
+            ProfessionalProfile(
+                user_id=doc.id,
+                registration_number="DEMO-TEST-0009",
+                council="Demo Medical Council",
+                verification_status="verified",
+                verified_at=now,
+                listed=True,
+                specialty="Cardiology",
+                degrees="MBBS, MD (Medicine), DM (Cardiology)",
+                experience_years=9,
+                languages="English, Hindi, Bengali",
+                practice="Demo Heart Clinic, 12 Park Street",
+                city="Kolkata",
+                about="Test account for appointments: weekly hours, offline mode and statistics.",
+            )
+        )
+    db.flush()
+    prof = db.get(ProfessionalProfile, doc.id)
+    if prof is not None and prof.pin_code is None:
+        prof.pin_code = DEMO_DOCTOR_PINS[TEST_DOCTOR_PHONE]
+    sched = db.get(DoctorSchedule, doc.id)
+    if sched is None:
+        hours = [{"day": d, "start": a, "end": b} for d in range(6) for a, b in (("10:00", "13:00"), ("17:00", "20:00"))]
+        sched = DoctorSchedule(
+            user_id=doc.id,
+            enabled=True,
+            timezone="Asia/Kolkata",
+            slot_min=15,
+            window_days=14,
+            weekly_hours=hours,
+            online=True,
+            in_person=True,
+            meeting_link="https://meet.google.com/demo-test-link",
+        )
+        db.add(sched)
+    db.flush()
+    # Linked with the demo patient (link + access grant, like an approved link request)
+    if db.scalar(select(CareLink.id).where(CareLink.patient_id == patient.id, CareLink.doctor_id == doc.id)) is None:
+        grant = AccessGrant(
+            patient_id=patient.id,
+            grantee_user_id=doc.id,
+            grantee_name=doc.full_name or "",
+            grantee_contact=doc.unique_id or "",
+            role="doctor",
+            vitals=["hr", "spo2", "bp", "resp", "temp", "glucose", "ecg"],
+            history="all",
+            downloads_allowed=True,
+            status="active",
+            created_at=now - timedelta(days=5),
+            accepted_at=now - timedelta(days=5),
+        )
+        db.add(grant)
+        db.flush()
+        t = now - timedelta(days=5)
+        db.add(
+            CareLink(kind="patient_doctor", patient_id=patient.id, doctor_id=doc.id, status="active", requested_by=patient.id,
+                     patient_ok_at=t, doctor_ok_at=t, decided_at=t, grant_id=grant.id)
+        )  # fmt: skip
+    if db.scalar(select(Appointment.id).where(Appointment.doctor_id == doc.id)) is not None:
+        return doc
+    # Slots on the doctor's grid: past days for history, the next days for requests
+    past = appointments.slot_times(sched, now - timedelta(days=6), now - timedelta(hours=2))
+    soon = appointments.slot_times(sched, now + timedelta(hours=3), now + timedelta(days=6))
+    rows = [
+        (past[0], patient, "online", "completed", "Follow-up after the Holter test"),
+        (past[len(past) // 3], patient, "in_person", "completed", "Blood pressure review"),
+        (past[len(past) // 2], None, "in_person", "completed", None),
+        (past[-6], family, "online", "no_show", "Chest tightness on stairs"),
+        (past[-3], patient, "online", "completed", None),
+        (soon[1], patient, "online", "accepted", "Discuss the ECG snapshots"),
+        (soon[5], family, "in_person", "requested", "First consultation"),
+        (soon[9], family, "online", "requested", "Medication side effects"),
+    ]
+    for (start, end), who, mode, status, reason in rows:
+        db.add(
+            Appointment(
+                doctor_id=doc.id,
+                patient_id=who.id if who else None,
+                guest_name=None if who else "Walk-in visitor (demo)",
+                starts_at=start,
+                ends_at=end,
+                mode=mode,
+                status=status,
+                source="booking" if who else "walk_in",
+                reason=reason,
+                meeting_link=sched.meeting_link if mode == "online" and status != "requested" else None,
+                created_at=start - timedelta(days=1),
+                decided_at=None if status == "requested" else start - timedelta(hours=20),
+            )
+        )
+    # A scheduled offline afternoon (online bookings blocked, in-person still open)
+    day = (now + timedelta(days=2)).astimezone(appointments.zone(sched.timezone)).date()
+    tz = appointments.zone(sched.timezone)
+    db.add(
+        DoctorOfflinePeriod(
+            doctor_id=doc.id,
+            starts_at=datetime.combine(day, time(17), tzinfo=tz),
+            ends_at=datetime.combine(day, time(20), tzinfo=tz),
+            kind="scheduled",
+            reason="Conference (demo)",
+        )
+    )
+    print("Added Dr. Arjun Test (demo) with weekly hours and sample appointments.")
+    return doc
 
 
 def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
@@ -308,6 +444,8 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
                 "test": "1",
             }
             device_hub.import_factory_row(db, staff, row, {"cardiosensai-12lead-dev": models["cardiosensai-12lead-dev"].id})
+
+    seed_test_doctor(db, patient, family)
 
     if db.scalar(select(Device).where(Device.patient_id == patient.id)) is not None:
         add_demo_12lead(db, patient)
@@ -512,6 +650,7 @@ def seed_demo(db: Session, models: dict[str, DeviceModel]) -> None:
     print(f"  patient@demo.cardiosens.ai  {patient.unique_id}")
     print(f"  doctor@demo.cardiosens.ai   {doctor.unique_id}  (authenticator secret {DEMO_TOTP_SECRET})")
     print(f"  clinic@demo.cardiosens.ai   {clinic_user.unique_id}  (authenticator secret {DEMO_TOTP_SECRET})")
+    print(f"  {TEST_DOCTOR_EMAIL}  (appointments test doctor, same password and authenticator secret)")
     print("  App (phone sign-in): patient +919800000001, doctor +919800000002, family +919800000003")
 
 

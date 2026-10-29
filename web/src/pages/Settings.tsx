@@ -7,6 +7,7 @@ import { DevicesSection } from '../components/Devices';
 import IdCard from '../components/IdCard';
 import { LicenceSection } from '../components/Licence';
 import PhoneInput from '../components/PhoneInput';
+import { AboutYouForm } from '../components/PatientDetails';
 import { MfaSetup } from '../components/Setup';
 import { Banner, errorText, StatusPill } from '../components/ui';
 import { day, formatId, ROLE_LABEL } from '../format';
@@ -118,17 +119,17 @@ function DoctorDetails() {
 
 /** Doctors: the card patients see in their Doctors list, and whether to be listed at all. */
 function DoctorListingSection() {
-  const [f, setF] = useState({ listed: false, degrees: '', experienceYears: '', languages: '', practice: '', city: '', about: '' });
+  const [f, setF] = useState({ listed: false, degrees: '', experienceYears: '', languages: '', practice: '', city: '', pinCode: '', about: '' });
   const [l, setL] = useState<DoctorListing | null>(null);
   const [msg, setMsg] = useState<Msg>(null);
   const fill = (x: DoctorListing) => {
     setL(x);
-    setF({ listed: x.listed, degrees: x.degrees ?? '', experienceYears: x.experienceYears?.toString() ?? '', languages: x.languages ?? '', practice: x.practice ?? '', city: x.city ?? '', about: x.about ?? '' });
+    setF({ listed: x.listed, degrees: x.degrees ?? '', experienceYears: x.experienceYears?.toString() ?? '', languages: x.languages ?? '', practice: x.practice ?? '', city: x.city ?? '', pinCode: x.pinCode ?? '', about: x.about ?? '' });
   };
   useEffect(() => {
     api<DoctorListing>('GET', '/v1/me/doctor-listing').then(fill, (e) => setMsg({ kind: 'error', text: errorText(e) }));
   }, []);
-  const text = (key: 'degrees' | 'languages' | 'practice' | 'city', label: string, hint?: string, max = 160) => (
+  const text = (key: 'degrees' | 'languages' | 'practice' | 'city' | 'pinCode', label: string, hint?: string, max = 160) => (
     <label className="field">
       {label}
       {hint && <small className="muted">{hint}</small>}
@@ -142,7 +143,7 @@ function DoctorListingSection() {
         e.preventDefault();
         try {
           const n = f.experienceYears.trim();
-          fill(await api<DoctorListing>('PUT', '/v1/me/doctor-listing', { ...f, experienceYears: n ? Number(n) : null }));
+          fill(await api<DoctorListing>('PUT', '/v1/me/doctor-listing', { ...f, pinCode: f.pinCode.replace(/\s/g, ''), experienceYears: n ? Number(n) : null }));
           setMsg({ kind: 'ok', text: 'Saved.' });
         } catch (ex) {
           setMsg({ kind: 'error', text: errorText(ex) });
@@ -164,6 +165,7 @@ function DoctorListingSection() {
       </label>
       {text('practice', 'Hospital or clinic', 'Where you see patients')}
       {text('city', 'City', undefined, 80)}
+      {text('pinCode', 'Practice PIN code', 'Lets patients find you with “Near me”. Only the area is shown, not the address.', 7)}
       {text('languages', 'Languages', 'For example: English, Hindi, Bengali')}
       <label className="field">
         About you
@@ -316,6 +318,12 @@ function sectionsFor(role: string): Section[] {
     { id: 'id', label: 'Your ID', hint: 'Give it to a doctor or clinic (or let them scan the QR code) so they can send you a link request.', body: <IdSection /> },
     { id: 'profile', label: 'Profile', hint: 'Your picture, name' + (role === 'patient' ? ', date of birth and emergency contact.' : '.'), body: <Profile /> },
     { id: 'contact', label: 'Mobile and email', hint: 'Where your sign-in codes and messages go.', body: <ContactDetails /> },
+    role === 'patient' && {
+      id: 'about',
+      label: 'About you',
+      hint: 'Height, weight, address with PIN code and health background. Your linked doctors see these; the PIN code also finds doctors near you.',
+      body: <AboutYouForm />,
+    },
     role === 'doctor' && { id: 'registration', label: 'Registration details', hint: 'Checked by CardiosensAI before you can see patients.', body: <DoctorDetails /> },
     role === 'doctor' && { id: 'listing', label: 'Doctors list', hint: 'Your card in the patients’ Doctors list. You choose whether to appear.', body: <DoctorListingSection /> },
     role === 'clinic' && { id: 'clinic', label: 'Clinic details', hint: 'Checked by CardiosensAI before the clinic can see patients.', body: <ClinicDetails /> },

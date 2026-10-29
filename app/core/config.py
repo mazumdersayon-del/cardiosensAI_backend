@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     msg91_auth_key: str = ""
     msg91_otp_template_id: str = ""  # DLT template with ##OTP##
     msg91_notice_template_id: str = ""  # optional: "this number already has an account" notice
+    msg91_reminder_template_id: str = ""  # optional: appointment reminder (Flow API, variables ##doctor## and ##time##)
 
     # Google sign-in (Google Identity Services). Web OAuth client ID; app client IDs are also accepted as audience.
     google_client_id: str = ""

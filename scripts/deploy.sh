@@ -31,6 +31,7 @@
 #   Daily backups (systemd timer)        /var/backups/cardiosensai (kept 14 days, same disk!), plus a
 #                                        pre-migrate-*.dump before every run that applies a migration
 #   Daily account purge (systemd timer)  cardiosensai-purge: erases admin-deleted accounts after 30 days
+#   Appointment reminders (systemd timer) cardiosensai-reminders: every 5 minutes
 #   Device broker (Mosquitto)            mqtts://DOMAIN:8883 for CardiosensAI devices (TLS, Let's Encrypt cert),
 #                                        127.0.0.1:1883 for the bridge; logins written by the app to /var/lib/cardiosensai-mqtt/passwd,
 #                                        copied for Mosquitto to /etc/mosquitto/cardiosens.passwd
@@ -451,6 +452,42 @@ WantedBy=timers.target
 EOF
 systemctl daemon-reload
 systemctl enable --now cardiosensai-purge.timer >/dev/null
+
+# ---------------------------------------------------------------- appointment reminders
+log "Scheduling appointment reminders (every 5 minutes)"
+cat >/etc/systemd/system/cardiosensai-reminders.service <<EOF
+[Unit]
+Description=CardiosensAI: remind patients and doctors of appointments starting within the hour
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$ENV_FILE
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=$VENV/bin/python -m app.scripts.appointment_reminders
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=$DATA_DIR
+UMask=0027
+EOF
+cat >/etc/systemd/system/cardiosensai-reminders.timer <<'EOF'
+[Unit]
+Description=CardiosensAI appointment reminders every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now cardiosensai-reminders.timer >/dev/null
 
 # ---------------------------------------------------------------- device broker + bridge
 log "Configuring the device broker (Mosquitto) and bridge"

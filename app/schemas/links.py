@@ -53,6 +53,13 @@ class EcgBriefOut(CamelModel):
     average_hr: int | None
 
 
+class NextAppointmentOut(CamelModel):
+    id: str
+    starts_at: datetime
+    mode: Literal["online", "in_person"]
+    status: Literal["requested", "accepted"]
+
+
 class LinkedPatientOut(CamelModel):
     patient_id: str
     unique_id: str
@@ -65,6 +72,10 @@ class LinkedPatientOut(CamelModel):
     latest: dict[str, LatestValueOut] = Field(default_factory=dict, description="Newest hr, spo2 and bp readings")
     latest_ecg: EcgBriefOut | None = None
     ecg_live: str | None = Field(default=None, description="live | stalled while an ECG is being recorded, else null")
+    phone: str | None = Field(default=None, description="Confirmed mobile number (shared with linked doctors and clinics)")
+    email: str | None = Field(default=None, description="Confirmed email address")
+    next_appointment: NextAppointmentOut | None = Field(default=None, description="Doctor view: the next open appointment with me")
+    unread_messages: int = Field(default=0, description="Doctor view: messages from this patient I haven't read")
 
 
 class ClinicDoctorOut(CamelModel):

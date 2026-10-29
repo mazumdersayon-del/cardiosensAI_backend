@@ -5,8 +5,17 @@ import { useAuth } from '../auth';
 import { Picture } from '../components/Avatar';
 import { Banner, errorText } from '../components/ui';
 import { formatId } from '../format';
+import { BookPanel } from './Appointments';
 
 const PAGE = 24;
+type DoctorPage = { items: DoctorCard[]; total: number; near?: string | null; nearProblem?: string | null };
+
+const RADII = [10, 25, 50, 100];
+
+function distance(km: number | null | undefined) {
+  if (km == null) return null;
+  return km < 1 ? 'Same area' : `about ${km} km`;
+}
 
 function years(n: number | null) {
   return n ? `${n} year${n === 1 ? '' : 's'} experience` : null;
@@ -21,15 +30,19 @@ export default function DoctorsPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  // Near me: doctors whose practice PIN code is within nearKm of the patient's PIN code, nearest first
+  const [nearKm, setNearKm] = useState<number | null>(null);
+  const [near, setNear] = useState<{ near: string | null; problem: string | null }>({ near: null, problem: null });
   const end = useRef<HTMLDivElement>(null);
 
-  const load = useCallback(async (search: string, offset: number) => {
+  const load = useCallback(async (search: string, km: number | null, offset: number) => {
     setBusy(true);
     setErr(null);
     try {
-      const page = await api<{ items: DoctorCard[]; total: number }>('GET', `/v1/doctors?limit=${PAGE}&offset=${offset}${search ? `&q=${encodeURIComponent(search)}` : ''}`);
+      const page = await api<DoctorPage>('GET', `/v1/doctors?limit=${PAGE}&offset=${offset}${search ? `&q=${encodeURIComponent(search)}` : ''}${km ? `&nearKm=${km}` : ''}`);
       setItems((old) => (offset ? [...old, ...page.items] : page.items));
       setTotal(page.total);
+      setNear({ near: page.near ?? null, problem: page.nearProblem ?? null });
     } catch (e) {
       setErr(errorText(e));
     } finally {
@@ -42,18 +55,18 @@ export default function DoctorsPage() {
     return () => clearTimeout(t);
   }, [q]);
   useEffect(() => {
-    void load(query, 0);
-  }, [query, load]);
+    void load(query, nearKm, 0);
+  }, [query, nearKm, load]);
 
   // more cards as the list scrolls to its end
   const more = total !== null && items.length < total;
   useEffect(() => {
     const el = end.current;
     if (!el || !more || busy) return;
-    const io = new IntersectionObserver((e) => e[0]?.isIntersecting && void load(query, items.length), { rootMargin: '400px' });
+    const io = new IntersectionObserver((e) => e[0]?.isIntersecting && void load(query, nearKm, items.length), { rootMargin: '400px' });
     io.observe(el);
     return () => io.disconnect();
-  }, [more, busy, items.length, query, load]);
+  }, [more, busy, items.length, query, nearKm, load]);
 
   return (
     <div className="stack" style={{ gap: 16 }}>
@@ -64,8 +77,38 @@ export default function DoctorsPage() {
         </div>
         <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, specialty, hospital or city" aria-label="Search doctors" />
       </div>
+      <div className="near-bar">
+        <label className="row" style={{ gap: 8 }}>
+          <input type="checkbox" checked={nearKm !== null} onChange={(e) => setNearKm(e.target.checked ? 25 : null)} />
+          <strong>Near me</strong>
+        </label>
+        {nearKm !== null && (
+          <>
+            <label className="row" style={{ gap: 6 }}>
+              within
+              <select value={nearKm} onChange={(e) => setNearKm(Number(e.target.value))} aria-label="Distance">
+                {RADII.map((r) => (
+                  <option key={r} value={r}>
+                    {r} km
+                  </option>
+                ))}
+              </select>
+            </label>
+            {near.near && <span className="muted small">of PIN {near.near}</span>}
+          </>
+        )}
+      </div>
+      {nearKm !== null && near.problem && (
+        <Banner kind="info">
+          {near.problem} <Link to="/settings#about">Open About you</Link>
+        </Banner>
+      )}
       {err && <Banner kind="error">{err}</Banner>}
-      {total === 0 && !busy && <p className="muted">{query ? `No doctors match “${query}”.` : 'No doctors are listed yet.'}</p>}
+      {total === 0 && !busy && !(nearKm !== null && near.problem) && (
+        <p className="muted">
+          {nearKm !== null ? `No listed doctors within ${nearKm} km${query ? ` match “${query}”` : ''}. Try a larger distance.` : query ? `No doctors match “${query}”.` : 'No doctors are listed yet.'}
+        </p>
+      )}
       <ul className="doctor-grid">
         {items.map((d) => (
           <li key={d.uniqueId}>
@@ -75,12 +118,22 @@ export default function DoctorsPage() {
               {d.specialty && <span className="doctor-spec">{d.specialty}</span>}
               {d.degrees && <span className="doctor-deg">{d.degrees}</span>}
               <span className="doctor-meta">{[years(d.experienceYears), [d.practice, d.city].filter(Boolean).join(', ')].filter(Boolean).join(' · ')}</span>
+              {distance(d.distanceKm) && <span className="pill info doctor-distance">{distance(d.distanceKm)}</span>}
             </button>
           </li>
         ))}
       </ul>
       <div ref={end} />
       {busy && <p className="muted">Loading…</p>}
+      {nearKm !== null && items.length > 0 && (
+        <p className="muted small">
+          Distances are approximate, measured between PIN code areas. PIN code locations ©{' '}
+          <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">
+            GeoNames
+          </a>{' '}
+          (CC BY 4.0).
+        </p>
+      )}
       {open && <DoctorDialog uniqueId={open} onClose={() => setOpen(null)} />}
     </div>
   );
@@ -93,6 +146,7 @@ function DoctorDialog({ uniqueId, onClose }: { uniqueId: string; onClose: () => 
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [booking, setBooking] = useState(false);
 
   useEffect(() => {
     ref.current?.showModal();
@@ -172,10 +226,14 @@ function DoctorDialog({ uniqueId, onClose }: { uniqueId: string; onClose: () => 
               ) : (
                 <span className="muted">Confirm your mobile number or email to link with a doctor.</span>
               )}
+              <button type="button" className="btn ghost" aria-expanded={booking} onClick={() => setBooking((b) => !b)}>
+                Book appointment
+              </button>
               <Link to="/links" className="btn ghost">
                 Care team
               </Link>
             </div>
+            {booking && <BookPanel doctorId={uniqueId} onClose={() => setBooking(false)} />}
           </>
         )}
       </div>

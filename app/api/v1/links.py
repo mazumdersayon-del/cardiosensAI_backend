@@ -22,16 +22,26 @@ from app.core.ids import normalize_unique_id, role_of
 from app.core.ratelimit import limiter
 from app.models import AccessGrant, AuditEvent, CareLink, EcgLiveSession, EcgRecording, Measurement, Organization, ProfessionalProfile, User
 from app.models.link import LINK_SIDES
-from app.schemas.links import ClinicDoctorOut, EcgBriefOut, LatestValueOut, LinkedPatientOut, LinkOut, LinkRequestIn, PartyOut
+from app.schemas.links import (
+    ClinicDoctorOut,
+    EcgBriefOut,
+    LatestValueOut,
+    LinkedPatientOut,
+    LinkOut,
+    LinkRequestIn,
+    NextAppointmentOut,
+    PartyOut,
+)
+from app.services import appointments as appts
 from app.services import audit
+from app.services import messages as msgs
 from app.services.accounts import account_status, can_view_patients, organization_of
-from app.services.authz import SHAREABLE, VITALS
+from app.services.authz import VITALS
+from app.services.care_links import OPEN, activate, org_owner
 from app.services.ecg import live_state
 from app.services.notifications import notify
 
 router = APIRouter(tags=["links"])
-
-OPEN = ("pending", "active")
 
 
 # ---------------------------------------------------------------- parties
@@ -50,11 +60,6 @@ def _party_user(db: Session, uid: str) -> User | None:
 
 def _party_org(db: Session, uid: str) -> Organization | None:
     return db.scalar(select(Organization).where(Organization.unique_id == uid))
-
-
-def _org_owner(db: Session, org: Organization) -> User | None:
-    owner = db.get(User, org.owner_user_id) if org.owner_user_id else None
-    return owner if owner is not None and owner.status == "active" else None
 
 
 def _user_party(db: Session, u: User) -> PartyOut:
@@ -146,56 +151,8 @@ def _counterparty_ids(db: Session, link: CareLink, side: str) -> list[uuid.UUID]
     if side == "doctor":
         return [link.doctor_id]
     org = db.get(Organization, link.organization_id)
-    owner = _org_owner(db, org) if org else None
+    owner = org_owner(db, org) if org else None
     return [owner.id] if owner else []
-
-
-# ---------------------------------------------------------------- grants
-
-
-def _grantee(db: Session, link: CareLink) -> tuple[User, str] | None:
-    if link.kind == "patient_doctor":
-        return db.get(User, link.doctor_id), "doctor"
-    if link.kind == "patient_clinic":
-        org = db.get(Organization, link.organization_id)
-        owner = _org_owner(db, org) if org else None
-        return (owner, "clinic") if owner else None
-    return None
-
-
-def _activate(db: Session, link: CareLink, meta: RequestMeta, actor: User) -> None:
-    now = utcnow()
-    link.status = "active"
-    link.decided_at = now
-    g = _grantee(db, link)
-    if g is not None:
-        grantee, role = g
-        grant = AccessGrant(
-            patient_id=link.patient_id,
-            grantee_user_id=grantee.id,
-            grantee_name=(db.get(Organization, link.organization_id).name if role == "clinic" else grantee.full_name) or "Doctor",
-            grantee_contact=grantee.unique_id or "",
-            role=role,
-            vitals=list(SHAREABLE),
-            history="all",
-            downloads_allowed=True,
-            status="active",
-            accepted_at=now,
-        )
-        db.add(grant)
-        db.flush()
-        link.grant_id = grant.id
-    audit.record(
-        db,
-        actor=actor,
-        action="link.activate",
-        patient_id=link.patient_id,
-        resource_type="link",
-        resource_id=link.id,
-        detail=link.kind,
-        meta=meta,
-        grant_id=link.grant_id,
-    )
 
 
 # ---------------------------------------------------------------- endpoints
@@ -212,7 +169,7 @@ def lookup(unique_id: str, user: User = Depends(get_current_user), db: Session =
     role = role_of(uid)
     if role == "clinic":
         org = _party_org(db, uid)
-        if org is None or _org_owner(db, org) is None:
+        if org is None or org_owner(db, org) is None:
             raise not_found("Account")
         return _org_party(org)
     if role == "patient" and not can_view_patients(db, user):
@@ -253,7 +210,7 @@ def request_link(
 
     if them == "clinic":
         org = _party_org(db, uid)
-        if org is None or _org_owner(db, org) is None:
+        if org is None or org_owner(db, org) is None:
             raise not_found("Account")
         link.organization_id = org.id
     else:
@@ -361,7 +318,7 @@ def approve_link(
     if getattr(link, _ok_attr(me)) is None:
         setattr(link, _ok_attr(me), utcnow())
     if all(getattr(link, _ok_attr(side)) is not None for side in LINK_SIDES[link.kind]):
-        _activate(db, link, meta, user)
+        activate(db, link, meta, user)
         for uid_ in _counterparty_ids(db, link, _other_side(link, me)):
             notify(
                 db,
@@ -513,6 +470,8 @@ def linked_patients(user: User = Depends(get_current_user), db: Session = Depend
             if d is not None and d.status == "active":
                 clinic_doctors[d.id] = d
     out: list[LinkedPatientOut] = []
+    now = utcnow()
+    unread = msgs.unread_from(db, user) if user.role == "doctor" else {}
     for link in links:
         grant = db.get(AccessGrant, link.grant_id) if link.grant_id else None
         patient = db.get(User, link.patient_id)
@@ -540,6 +499,14 @@ def linked_patients(user: User = Depends(get_current_user), db: Session = Depend
                 linked_at=link.decided_at,
                 last_measurement_at=_last_measurement(db, patient.id),
                 doctors=doctors,
+                phone=patient.phone if patient.phone_verified_at else None,
+                email=patient.email if patient.email_verified_at else None,
+                next_appointment=(
+                    NextAppointmentOut(id=str(nxt.id), starts_at=nxt.starts_at, mode=nxt.mode, status=nxt.status)
+                    if user.role == "doctor" and (nxt := appts.next_with(db, user.id, patient.id, now))
+                    else None
+                ),
+                unread_messages=unread.get(patient.id, 0),
             )
         )
     db.commit()

@@ -2,16 +2,22 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth, useTheme } from '../auth';
 import { formatId, ROLE_LABEL } from '../format';
 import Avatar from './Avatar';
+import { useUnread } from './Messages';
 import SiteFooter from './SiteFooter';
 
-const NAV: Record<string, { to: string; label: string }[]> = {
+/** `badge`: show the unread messages count on this item. */
+const NAV: Record<string, { to: string; label: string; badge?: boolean }[]> = {
   patient: [
     { to: '/', label: 'Home' },
+    { to: '/appointments', label: 'Appointments' },
+    { to: '/messages', label: 'Messages', badge: true },
     { to: '/doctors', label: 'Doctors' },
     { to: '/links', label: 'Care team' },
   ],
   doctor: [
-    { to: '/', label: 'Patients' },
+    { to: '/', label: 'Home' },
+    { to: '/patients', label: 'Patients', badge: true },
+    { to: '/statistics', label: 'Statistics' },
     { to: '/links', label: 'Links' },
   ],
   clinic: [
@@ -47,6 +53,7 @@ export function ThemeButton({ className = 'icon-btn' }: { className?: string }) 
 export default function Layout() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const unread = useUnread(user?.role === 'patient' || user?.role === 'doctor');
   if (!user) return null;
   return (
     <>
@@ -60,6 +67,11 @@ export default function Layout() {
             {NAV[user.role].map((n) => (
               <NavLink key={n.to} to={n.to} end={n.to === '/' || n.to === '/admin'}>
                 {n.label}
+                {n.badge && unread > 0 && (
+                  <span className="nav-badge" aria-label={`${unread} unread message${unread > 1 ? 's' : ''}`}>
+                    {unread}
+                  </span>
+                )}
               </NavLink>
             ))}
           </nav>

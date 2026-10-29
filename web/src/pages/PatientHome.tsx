@@ -2,9 +2,11 @@ import { useAuth } from '../auth';
 import { useCallback, useState } from 'react';
 import { DocumentUpload } from '../components/Documents';
 import { EcgCards } from '../components/EcgCards';
+import { UpcomingAppointmentsCard } from './Appointments';
 import FileHistory from '../components/FileHistory';
 import { LinksTable, useLinks } from '../components/Links';
 import ReportsPanel from '../components/Reports';
+import { AddressReminder } from '../components/PatientDetails';
 import { PhoneReminder } from '../components/Setup';
 import { Banner } from '../components/ui';
 import { History, LatestVitals } from '../components/Vitals';
@@ -27,6 +29,7 @@ export default function PatientHome() {
           <PhoneReminder />
         </div>
       )}
+      <AddressReminder />
       {waiting.length > 0 && (
         <div className="span-12">
           <Banner kind="info">
@@ -45,6 +48,7 @@ export default function PatientHome() {
         <LatestVitals patientId="me" compact />
       </section>
       <EcgCards patientId="me" />
+      <UpcomingAppointmentsCard />
       <section className="card span-12 files-card">
         <div className="files-main">
           <h2>Reports and documents</h2>

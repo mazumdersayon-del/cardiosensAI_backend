@@ -95,6 +95,7 @@ class ProfessionalProfile(Base):
     languages: Mapped[str | None] = mapped_column(String(160))
     practice: Mapped[str | None] = mapped_column(String(160))  # hospital / clinic where they see patients
     city: Mapped[str | None] = mapped_column(String(80))
+    pin_code: Mapped[str | None] = mapped_column(String(6))  # practice PIN: "Near me" in the patients' Doctors list
     about: Mapped[str | None] = mapped_column(String(800))
 
 

@@ -147,3 +147,8 @@ def send_account_restored(to: str, name: str | None) -> bool:
         f"Hello {name or ''},\n\nYour CardiosensAI account has been restored. You can sign in again at {_link('/')}. "
         "Links and shares that were active before are active again.\n\nCardiosensAI",
     )
+
+
+def send_appointment_notice(to: str, name: str | None, title: str, text: str, path: str) -> bool:
+    """Appointment requested / accepted / declined / cancelled / reminder. Never the patient's note."""
+    return send_email(to, f"CardiosensAI: {title}", f"Hello {name or ''},\n\n{text}\n\nOpen CardiosensAI: {_link(path)}\n\nCardiosensAI")

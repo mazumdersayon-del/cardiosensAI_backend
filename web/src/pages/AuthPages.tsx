@@ -491,7 +491,7 @@ export function RegisterCodePage() {
           setErr(null);
           try {
             await signIn('/v1/auth/register/verify', { signupId: started.signupId, phoneCode: needPhone ? phoneCode : null, emailCode: needEmail ? emailCode : null });
-            nav('/', { replace: true });
+            nav('/about-you', { replace: true }); // patients: the optional About you step; everyone else goes on to Home
           } catch (ex) {
             setErr(errorText(ex));
           } finally {

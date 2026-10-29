@@ -176,6 +176,13 @@ export interface LinkedPatient {
   linkedAt: string | null;
   lastMeasurementAt: string | null;
   doctors: Party[];
+  /** Confirmed contact details */
+  phone: string | null;
+  email: string | null;
+  /** Doctor view: the next open appointment with me */
+  nextAppointment: { id: string; startsAt: string; mode: ApptMode; status: 'requested' | 'accepted' } | null;
+  /** Doctor view: messages from this patient I haven't read */
+  unreadMessages: number;
 }
 
 export interface ClinicDoctor {
@@ -508,6 +515,9 @@ export interface DoctorCard {
   practice: string | null;
   city: string | null;
   avatarVersion: string | null;
+  pinCode?: string | null;
+  /** Near me: about how far the practice is (km; 0 = same area) */
+  distanceKm?: number | null;
 }
 
 export interface Doctor extends DoctorCard {
@@ -525,6 +535,8 @@ export interface DoctorListing {
   languages: string | null;
   practice: string | null;
   city: string | null;
+  /** Practice PIN code (patients' Near me) */
+  pinCode: string | null;
   about: string | null;
   specialty: string | null;
   visible: boolean;
@@ -647,4 +659,187 @@ export interface FactoryImport {
   imported: number;
   errors: { line: number; deviceUid: string | null; error: string }[];
   brokerUpdated: boolean;
+}
+
+// ---- appointments (app/api/v1/appointments.py)
+export type ApptMode = 'online' | 'in_person';
+export type ApptStatus = 'requested' | 'accepted' | 'declined' | 'cancelled' | 'expired' | 'completed' | 'no_show';
+
+export interface WeeklyHours {
+  day: number; // 0 = Monday
+  start: string; // HH:MM
+  end: string;
+}
+
+export interface OfflinePeriod {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  kind: 'now' | 'scheduled';
+  reason: string | null;
+}
+
+export interface OfflineStatus {
+  offline: boolean;
+  until: string | null;
+  periods: OfflinePeriod[];
+}
+
+export interface CalendarSettings {
+  enabled: boolean;
+  timezone: string;
+  slotMin: number;
+  windowDays: number;
+  weeklyHours: WeeklyHours[];
+  online: boolean;
+  inPerson: boolean;
+  meetingLink: string | null;
+  bookable: boolean;
+  hint: string | null;
+  offline: OfflineStatus;
+}
+
+export interface Slot {
+  startsAt: string;
+  endsAt: string;
+  online: boolean;
+  inPerson: boolean;
+  taken: boolean;
+  offline: boolean;
+}
+
+export interface Person {
+  uniqueId: string | null;
+  fullName: string;
+}
+
+export interface Appointment {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  mode: ApptMode;
+  status: ApptStatus;
+  source: 'booking' | 'walk_in';
+  reason: string | null;
+  doctorNote: string | null;
+  meetingLink: string | null;
+  doctor: Person;
+  patient: Person;
+  patientLinked: boolean;
+  patientRecordId: string | null;
+  /** A link request between them is waiting for the doctor */
+  linkPending: boolean;
+  practice: string | null;
+  createdAt: string;
+}
+
+export interface CalendarWeek {
+  timezone: string;
+  slots: Slot[];
+  appointments: Appointment[];
+  offlinePeriods: OfflinePeriod[];
+}
+
+export interface DoctorCalendar {
+  doctor: Person;
+  bookable: boolean;
+  reason: string | null;
+  timezone: string;
+  online: boolean;
+  inPerson: boolean;
+  offlineUntil: string | null;
+  practice: string | null;
+  city: string | null;
+  windowDays: number;
+  limitReached: boolean;
+  /** The patient's link with this doctor */
+  linkStatus: 'pending' | 'active' | null;
+  slots: Slot[];
+}
+
+export interface RangeStats {
+  served: number;
+  servedOnline: number;
+  servedInPerson: number;
+  patients: number;
+  noShow: number;
+  cancelled: number;
+  declined: number;
+  expired: number;
+  toMark: number;
+}
+
+export interface AppointmentStats {
+  pending: number;
+  upcoming: number;
+  upcomingOnline: number;
+  upcomingInPerson: number;
+  upcomingToday: number;
+  nextAt: string | null;
+  ranges: Record<'today' | '7d' | '30d' | 'all', RangeStats>;
+}
+
+// ---- messages (app/api/v1/messages.py)
+export interface MessagePartner {
+  userId: string;
+  uniqueId: string | null;
+  fullName: string;
+  role: 'patient' | 'doctor';
+}
+
+export interface ChatMessage {
+  id: string;
+  mine: boolean;
+  body: string;
+  createdAt: string;
+  readAt: string | null;
+}
+
+export interface Conversation {
+  partner: MessagePartner;
+  canSend: boolean;
+  unread: number;
+  lastAt: string | null;
+  lastPreview: string | null;
+  lastMine: boolean;
+}
+
+export interface MessageThread {
+  partner: MessagePartner;
+  canSend: boolean;
+  messages: ChatMessage[];
+}
+
+// ---- patient details (app/api/v1/patient_profile.py)
+export interface PatientProfile {
+  heightCm: number | null;
+  weightKg: number | null;
+  weightAt: string | null;
+  bmi: number | null;
+  sex: 'female' | 'male' | 'other' | 'undisclosed' | null;
+  bloodGroup: string | null;
+  /** Doctors: only when the patient shares the address */
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  district: string | null;
+  state: string | null;
+  pinCode: string | null;
+  pinKnown: boolean;
+  shareAddress: boolean;
+  conditions: string[];
+  conditionsOther: string | null;
+  allergies: string | null;
+  medicines: string | null;
+  smoking: 'never' | 'former' | 'current' | null;
+  updatedAt: string | null;
+  needsAddress: boolean;
+  showReminder: boolean;
+}
+
+export interface PinInfo {
+  pin: string;
+  district: string;
+  state: string;
+  place: string;
 }

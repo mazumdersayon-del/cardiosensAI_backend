@@ -10,6 +10,7 @@ class DoctorListingIn(CamelModel):
     languages: str | None = Field(default=None, max_length=160)
     practice: str | None = Field(default=None, max_length=160)
     city: str | None = Field(default=None, max_length=80)
+    pin_code: str | None = Field(default=None, max_length=10, description="Practice PIN code (patients' 'Near me'); kept when not sent")
     about: str | None = Field(default=None, max_length=800)
 
 
@@ -28,6 +29,8 @@ class DoctorCardOut(CamelModel):
     practice: str | None
     city: str | None
     avatar_version: str | None
+    pin_code: str | None = None
+    distance_km: float | None = Field(default=None, description="Near me: about how far the practice is from the patient's PIN code")
 
 
 class DoctorOut(DoctorCardOut):
@@ -41,3 +44,5 @@ class DoctorOut(DoctorCardOut):
 class DoctorPage(CamelModel):
     items: list[DoctorCardOut]
     total: int
+    near: str | None = Field(default=None, description="Near me: the patient's PIN code and place used, e.g. '560001 · Bengaluru'")
+    near_problem: str | None = Field(default=None, description="Near me couldn't be used: why (no PIN code yet, unknown PIN)")

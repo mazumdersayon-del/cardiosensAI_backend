@@ -21,10 +21,13 @@ from app.core.db import utcnow
 from app.models import (
     AccessGrant,
     ActionToken,
+    Appointment,
     CareLink,
     Device,
     DeviceConfig,
     DevicePairing,
+    DoctorOfflinePeriod,
+    DoctorSchedule,
     Document,
     DocumentComment,
     DocumentFile,
@@ -36,8 +39,10 @@ from app.models import (
     FactoryDevice,
     Invite,
     Measurement,
+    Message,
     Notification,
     Organization,
+    PatientProfile,
     ProfessionalProfile,
     RefreshToken,
     Report,
@@ -121,6 +126,14 @@ def erase_account(
         .where(link_party, CareLink.status.in_(("pending", "active")))
         .values(status="ended", ended_at=now, ended_by=user.id)
     )
+
+    # ---- appointments (both sides) and the doctor's calendar
+    db.execute(delete(Appointment).where(or_(Appointment.patient_id == user.id, Appointment.doctor_id == user.id)))
+    db.execute(delete(Message).where(or_(Message.patient_id == user.id, Message.doctor_id == user.id)))
+    db.execute(delete(PatientProfile).where(PatientProfile.user_id == user.id))
+    db.execute(update(Appointment).where(Appointment.cancelled_by == user.id).values(cancelled_by=None))
+    db.execute(delete(DoctorOfflinePeriod).where(DoctorOfflinePeriod.doctor_id == user.id))
+    db.execute(delete(DoctorSchedule).where(DoctorSchedule.user_id == user.id))
 
     # ---- doctor / clinic registration
     keys += list(db.scalars(select(VerificationFile.storage_key).where(VerificationFile.user_id == user.id)))

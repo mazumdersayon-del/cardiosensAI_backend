@@ -23,6 +23,7 @@
 # Options:
 #   --template ID         MSG91 OTP template id (DLT-approved, with ##OTP##). Required the first time
 #   --notice-template ID  Optional template for the "already registered" notice ("" removes it)
+#   --reminder-template ID  Optional appointment reminder template (Flow, variables ##doctor## and ##time##; "" removes it)
 #   --new-key             Ask for a new auth key even if one is saved (otherwise the saved key is kept)
 #   --test NUMBER         Send a test code to this number (E.164, e.g. +919812345678)
 #   --show                Print the current SMS settings (auth key masked) and exit
@@ -68,6 +69,8 @@ mask() { local v=$1; [[ -z $v ]] && echo "(not set)" || echo "${v:0:4}…${v: -4
 TEMPLATE=""
 NOTICE=""
 NOTICE_SET=0
+REMINDER=""
+REMINDER_SET=0
 NEW_KEY=0
 TEST_TO=""
 SHOW=0
@@ -76,6 +79,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --template) TEMPLATE=${2?}; shift 2 ;;
     --notice-template) NOTICE=${2?}; NOTICE_SET=1; shift 2 ;;
+    --reminder-template) REMINDER=${2?}; REMINDER_SET=1; shift 2 ;;
     --new-key) NEW_KEY=1; shift ;;
     --test) TEST_TO=${2?}; shift 2 ;;
     --show) SHOW=1; shift ;;
@@ -89,12 +93,14 @@ done
 [[ -z $TEST_TO ]] || is_e164 "$TEST_TO" || die "--test needs a number in E.164, e.g. +919812345678"
 [[ -z $TEMPLATE ]] || is_template "$TEMPLATE" || warn "--template '$TEMPLATE' doesn't look like an MSG91 template id (24 hex characters); using it anyway"
 [[ -z $NOTICE ]] || is_template "$NOTICE" || warn "--notice-template '$NOTICE' doesn't look like an MSG91 template id; using it anyway"
+[[ -z $REMINDER ]] || is_template "$REMINDER" || warn "--reminder-template '$REMINDER' doesn't look like an MSG91 template id; using it anyway"
 
 if [[ $SHOW -eq 1 ]]; then
   echo "SMS_PROVIDER=$(kv_get SMS_PROVIDER $ENV_FILE)"
   echo "MSG91_AUTH_KEY=$(mask "$(kv_get MSG91_AUTH_KEY $ENV_FILE)")"
   echo "MSG91_OTP_TEMPLATE_ID=$(kv_get MSG91_OTP_TEMPLATE_ID $ENV_FILE)"
   echo "MSG91_NOTICE_TEMPLATE_ID=$(kv_get MSG91_NOTICE_TEMPLATE_ID $ENV_FILE)"
+  echo "MSG91_REMINDER_TEMPLATE_ID=$(kv_get MSG91_REMINDER_TEMPLATE_ID $ENV_FILE)"
   exit 0
 fi
 
@@ -133,7 +139,7 @@ if [[ $OFF -eq 1 ]]; then
 fi
 
 # Only a test: keep the settings as they are.
-if [[ -z $TEMPLATE && $NOTICE_SET -eq 0 && $NEW_KEY -eq 0 ]]; then
+if [[ -z $TEMPLATE && $NOTICE_SET -eq 0 && $REMINDER_SET -eq 0 && $NEW_KEY -eq 0 ]]; then
   [[ -n $TEST_TO ]] || die "Nothing to do. First setup: --template ID [--test NUMBER]; see --help"
   [[ $(kv_get SMS_PROVIDER $ENV_FILE) == msg91 ]] || die "MSG91 isn't set up yet: sudo bash $0 --template ID --test $TEST_TO"
   send_test "$TEST_TO"
@@ -161,6 +167,9 @@ kv_set MSG91_AUTH_KEY "$KEY" $ENV_FILE
 kv_set MSG91_OTP_TEMPLATE_ID "$TEMPLATE" $ENV_FILE
 if [[ $NOTICE_SET -eq 1 ]]; then
   kv_set MSG91_NOTICE_TEMPLATE_ID "$NOTICE" $ENV_FILE
+fi
+if [[ $REMINDER_SET -eq 1 ]]; then
+  kv_set MSG91_REMINDER_TEMPLATE_ID "$REMINDER" $ENV_FILE
 fi
 kv_del TWILIO_ $ENV_FILE # Twilio is no longer supported
 

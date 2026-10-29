@@ -361,6 +361,7 @@ cat <<EOF
   Web app:  $WEB_BASE_URL
   API docs: http://localhost:$PORT/docs
   Sign in:  patient@demo.cardiosens.ai / doctor@demo.cardiosens.ai / clinic@demo.cardiosens.ai
+            testdoctor@demo.cardiosens.ai (appointments: Home calendar, offline mode, Statistics)
             password cardiosens-demo-2026; doctor & clinic code: bash scripts/run_local.sh totp
   Mode:     $MODE
   Devices:  broker localhost:$MQTT_LOCAL_PORT; simulator: bash scripts/run_local.sh device --device CS12-TEST-0001 --secret ...
