@@ -1,7 +1,7 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
 import Layout from './components/Layout';
-import { DoctorHome, DoctorStats, PatientAppointments } from './pages/Appointments';
+import { DoctorHome, DoctorStats } from './pages/Appointments';
 import { AdminDevices, AdminOverview, AdminUsers, AdminVerification } from './pages/Admin';
 import { ForgotPasswordPage, LoginCodePage, LoginPage, RegisterCodePage, RegisterPage, ResetPasswordPage } from './pages/AuthPages';
 import DoctorsPage from './pages/Doctors';
@@ -9,7 +9,6 @@ import LinksPage from './pages/LinksPage';
 import PatientHome from './pages/PatientHome';
 import { ClinicDoctors, PatientDetail, ProDashboard } from './pages/ProDashboard';
 import Settings from './pages/Settings';
-import { MessagesPage } from './components/Messages';
 import { AboutYouPage } from './components/PatientDetails';
 
 /** "/" is the role's home when signed in, otherwise the common sign-in page. */
@@ -46,9 +45,11 @@ export default function App() {
           <Route path="/doctors" element={user.role === 'clinic' ? <ClinicDoctors /> : user.role === 'patient' ? <DoctorsPage /> : <Navigate to="/" />} />
           <Route path="/patients" element={user.role === 'doctor' ? <ProDashboard /> : <Navigate to="/" replace />} />
           <Route path="/statistics" element={user.role === 'doctor' ? <DoctorStats /> : <Navigate to="/" replace />} />
-          <Route path="/appointments" element={user.role === 'patient' ? <PatientAppointments /> : <Navigate to="/" replace />} />
-          <Route path="/messages" element={user.role === 'patient' ? <MessagesPage /> : <Navigate to={user.role === 'doctor' ? '/patients' : '/'} replace />} />
-          <Route path="/messages/:party" element={user.role === 'patient' ? <MessagesPage /> : <Navigate to={user.role === 'doctor' ? '/patients' : '/'} replace />} />
+          {/* Appointments and Messages pages are gone for patients: appointments are a tile on Doctors, messages are on Care team.
+              Old links (notifications, emails, bookmarks) still land in the right place. */}
+          <Route path="/appointments" element={<Navigate to={user.role === 'patient' ? '/doctors#appointments' : '/'} replace />} />
+          <Route path="/messages" element={<Navigate to={user.role === 'patient' ? '/links' : user.role === 'doctor' ? '/patients' : '/'} replace />} />
+          <Route path="/messages/:party" element={<MessagesRedirect />} />
           <Route path="/patients/:patientId" element={user.role === 'doctor' || user.role === 'clinic' ? <PatientDetail /> : <Navigate to="/" />} />
           <Route path="/devices" element={<Navigate to={user.role === 'admin' ? '/' : '/settings#devices'} replace />} />
           <Route path="/settings" element={<Settings />} />
@@ -67,4 +68,11 @@ export default function App() {
       )}
     </Routes>
   );
+}
+
+/** A message notification's link (/messages/{doctor}): patients read it on Care team. */
+function MessagesRedirect() {
+  const { user } = useAuth();
+  const { party = '' } = useParams();
+  return <Navigate to={user?.role === 'patient' ? `/links?with=${encodeURIComponent(party)}` : user?.role === 'doctor' ? '/patients' : '/'} replace />;
 }

@@ -5,7 +5,7 @@ import { useAuth } from '../auth';
 import { Picture } from '../components/Avatar';
 import { Banner, errorText } from '../components/ui';
 import { formatId } from '../format';
-import { BookPanel } from './Appointments';
+import { AppointmentsTile, BookPanel } from './Appointments';
 
 const PAGE = 24;
 type DoctorPage = { items: DoctorCard[]; total: number; near?: string | null; nearProblem?: string | null };
@@ -21,7 +21,8 @@ function years(n: number | null) {
   return n ? `${n} year${n === 1 ? '' : 's'} experience` : null;
 }
 
-/** Patients: every verified doctor who chose to be listed, as cards; a card opens the full profile. */
+/** Patients: every verified doctor who chose to be listed, as cards (a card opens the full profile), with the patient's
+ * appointments as a tile on the right. */
 export default function DoctorsPage() {
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
@@ -39,7 +40,10 @@ export default function DoctorsPage() {
     setBusy(true);
     setErr(null);
     try {
-      const page = await api<DoctorPage>('GET', `/v1/doctors?limit=${PAGE}&offset=${offset}${search ? `&q=${encodeURIComponent(search)}` : ''}${km ? `&nearKm=${km}` : ''}`);
+      const page = await api<DoctorPage>(
+        'GET',
+        `/v1/doctors?limit=${PAGE}&offset=${offset}${search ? `&q=${encodeURIComponent(search)}` : ''}${km ? `&nearKm=${km}` : ''}`,
+      );
       setItems((old) => (offset ? [...old, ...page.items] : page.items));
       setTotal(page.total);
       setNear({ near: page.near ?? null, problem: page.nearProblem ?? null });
@@ -75,65 +79,87 @@ export default function DoctorsPage() {
           <h1>Doctors</h1>
           <p className="muted">Doctors verified by CardiosensAI who chose to be listed. Open a card to see their profile and send a link request.</p>
         </div>
-        <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, specialty, hospital or city" aria-label="Search doctors" />
+        <input
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name, specialty, hospital or city"
+          aria-label="Search doctors"
+        />
       </div>
-      <div className="near-bar">
-        <label className="row" style={{ gap: 8 }}>
-          <input type="checkbox" checked={nearKm !== null} onChange={(e) => setNearKm(e.target.checked ? 25 : null)} />
-          <strong>Near me</strong>
-        </label>
-        {nearKm !== null && (
-          <>
-            <label className="row" style={{ gap: 6 }}>
-              within
-              <select value={nearKm} onChange={(e) => setNearKm(Number(e.target.value))} aria-label="Distance">
-                {RADII.map((r) => (
-                  <option key={r} value={r}>
-                    {r} km
-                  </option>
-                ))}
-              </select>
+      <div className="doctors-layout">
+        <div className="stack doctors-main" style={{ gap: 16 }}>
+          <div className="near-bar">
+            <label className="row" style={{ gap: 8 }}>
+              <input type="checkbox" checked={nearKm !== null} onChange={(e) => setNearKm(e.target.checked ? 25 : null)} />
+              <strong>Near me</strong>
             </label>
-            {near.near && <span className="muted small">of PIN {near.near}</span>}
-          </>
-        )}
+            {nearKm !== null && (
+              <>
+                <label className="row" style={{ gap: 6 }}>
+                  within
+                  <select value={nearKm} onChange={(e) => setNearKm(Number(e.target.value))} aria-label="Distance">
+                    {RADII.map((r) => (
+                      <option key={r} value={r}>
+                        {r} km
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {near.near && <span className="muted small">of PIN {near.near}</span>}
+              </>
+            )}
+          </div>
+          {nearKm !== null && near.problem && (
+            <Banner kind="info">
+              {near.problem} <Link to="/settings#about">Open About you</Link>
+            </Banner>
+          )}
+          {err && <Banner kind="error">{err}</Banner>}
+          {total === 0 && !busy && !(nearKm !== null && near.problem) && (
+            <p className="muted">
+              {nearKm !== null
+                ? `No listed doctors within ${nearKm} km${query ? ` match “${query}”` : ''}. Try a larger distance.`
+                : query
+                  ? `No doctors match “${query}”.`
+                  : 'No doctors are listed yet.'}
+            </p>
+          )}
+          <ul className="doctor-grid">
+            {items.map((d) => (
+              <li key={d.uniqueId}>
+                <button
+                  type="button"
+                  className="doctor-card"
+                  onClick={() => setOpen(d.uniqueId)}
+                  aria-label={`${d.fullName}, ${d.specialty ?? 'doctor'}. Open profile`}
+                >
+                  <Picture path={`/v1/doctors/${d.uniqueId}/avatar`} version={d.avatarVersion} name={d.fullName} size={72} />
+                  <span className="doctor-name">{d.fullName}</span>
+                  {d.specialty && <span className="doctor-spec">{d.specialty}</span>}
+                  {d.degrees && <span className="doctor-deg">{d.degrees}</span>}
+                  <span className="doctor-meta">{[years(d.experienceYears), [d.practice, d.city].filter(Boolean).join(', ')].filter(Boolean).join(' · ')}</span>
+                  {distance(d.distanceKm) && <span className="pill info doctor-distance">{distance(d.distanceKm)}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div ref={end} />
+          {busy && <p className="muted">Loading…</p>}
+          {nearKm !== null && items.length > 0 && (
+            <p className="muted small">
+              Distances are approximate, measured between PIN code areas. PIN code locations ©{' '}
+              <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">
+                GeoNames
+              </a>{' '}
+              (CC BY 4.0).
+            </p>
+          )}
+        </div>
+        <aside className="doctors-side">
+          <AppointmentsTile />
+        </aside>
       </div>
-      {nearKm !== null && near.problem && (
-        <Banner kind="info">
-          {near.problem} <Link to="/settings#about">Open About you</Link>
-        </Banner>
-      )}
-      {err && <Banner kind="error">{err}</Banner>}
-      {total === 0 && !busy && !(nearKm !== null && near.problem) && (
-        <p className="muted">
-          {nearKm !== null ? `No listed doctors within ${nearKm} km${query ? ` match “${query}”` : ''}. Try a larger distance.` : query ? `No doctors match “${query}”.` : 'No doctors are listed yet.'}
-        </p>
-      )}
-      <ul className="doctor-grid">
-        {items.map((d) => (
-          <li key={d.uniqueId}>
-            <button type="button" className="doctor-card" onClick={() => setOpen(d.uniqueId)} aria-label={`${d.fullName}, ${d.specialty ?? 'doctor'}. Open profile`}>
-              <Picture path={`/v1/doctors/${d.uniqueId}/avatar`} version={d.avatarVersion} name={d.fullName} size={72} />
-              <span className="doctor-name">{d.fullName}</span>
-              {d.specialty && <span className="doctor-spec">{d.specialty}</span>}
-              {d.degrees && <span className="doctor-deg">{d.degrees}</span>}
-              <span className="doctor-meta">{[years(d.experienceYears), [d.practice, d.city].filter(Boolean).join(', ')].filter(Boolean).join(' · ')}</span>
-              {distance(d.distanceKm) && <span className="pill info doctor-distance">{distance(d.distanceKm)}</span>}
-            </button>
-          </li>
-        ))}
-      </ul>
-      <div ref={end} />
-      {busy && <p className="muted">Loading…</p>}
-      {nearKm !== null && items.length > 0 && (
-        <p className="muted small">
-          Distances are approximate, measured between PIN code areas. PIN code locations ©{' '}
-          <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">
-            GeoNames
-          </a>{' '}
-          (CC BY 4.0).
-        </p>
-      )}
       {open && <DoctorDialog uniqueId={open} onClose={() => setOpen(null)} />}
     </div>
   );
@@ -168,7 +194,13 @@ function DoctorDialog({ uniqueId, onClose }: { uniqueId: string; onClose: () => 
   };
 
   return (
-    <dialog ref={ref} className="ecg-dialog doctor-dialog" onClose={onClose} onClick={(e) => e.target === e.currentTarget && ref.current?.close()} aria-label="Doctor profile">
+    <dialog
+      ref={ref}
+      className="ecg-dialog doctor-dialog"
+      onClose={onClose}
+      onClick={(e) => e.target === e.currentTarget && ref.current?.close()}
+      aria-label="Doctor profile"
+    >
       <div className="ecg-dialog-box">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div className="row" style={{ gap: 16, alignItems: 'center' }}>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   api,
@@ -30,6 +30,7 @@ import {
 } from '../calendar';
 import { CalendarBoard, ModeIcon } from '../components/DoctorCalendar';
 import { CATEGORIES } from '../components/Documents';
+import { ListingNotice } from '../components/ListingNotice';
 import { PhoneReminder, SetupChecklist } from '../components/Setup';
 import { Banner, errorText, useLoad } from '../components/ui';
 import { formatId } from '../format';
@@ -89,6 +90,7 @@ export function DoctorHome() {
       <div className="span-12 stack">
         <PhoneReminder />
         <SetupChecklist />
+        <ListingNotice />
         {sErr && <Banner kind="error">{sErr}</Banner>}
       </div>
       {settings && (
@@ -1004,79 +1006,82 @@ function Tile({ label, value, text, sub, to, tone, small }: { label: string; val
 // ---------------------------------------------------------------- patients
 
 /** Patient: upcoming and past appointments, and booking with linked doctors (others via the Doctors list). */
-export function PatientAppointments() {
+/** Patients: the Appointments tile beside the Doctors list: upcoming (and past) appointments, and booking with a linked doctor. */
+export function AppointmentsTile() {
   const [version, setVersion] = useState(0);
   const [up, upErr] = useLoad(() => api<Appointment[]>('GET', '/v1/appointments?scope=upcoming'), [version]);
   const [past] = useLoad(() => api<Appointment[]>('GET', '/v1/appointments?scope=past'), [version]);
   const [doctors] = useLoad(() => api<Person[]>('GET', '/v1/appointments/doctors'), []);
   const [booking, setBooking] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
   const bump = () => setVersion((v) => v + 1);
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  useEffect(() => {
+    if (booking) dialog.current?.showModal();
+  }, [booking]);
+  // open ones on top; cancelled / declined / expired upcoming ones go with the past, newest first
+  const live = (a: Appointment) => a.status === 'requested' || a.status === 'accepted';
+  const open = (up ?? []).filter(live);
+  const done = [...(up ?? []).filter((a) => !live(a)).reverse(), ...(past ?? [])];
   return (
-    <div className="grid">
-      {notice && (
-        <div className="span-12">
-          <Banner kind="ok">{notice}</Banner>
-        </div>
-      )}
-      <section className="card span-8">
-        <h2>My appointments</h2>
-        {upErr && <Banner kind="error">{upErr}</Banner>}
-        {up && up.length === 0 && <p className="muted">No upcoming appointments.</p>}
-        <ul className="appt-list">
-          {(up ?? []).map((a) => (
-            <PatientApptRow key={a.id} a={a} onChanged={bump} />
-          ))}
-        </ul>
-        {past && past.length > 0 && (
-          <details style={{ marginTop: 12 }}>
-            <summary>Past appointments ({past.length})</summary>
-            <ul className="appt-list">
-              {past.slice(0, 50).map((a) => (
-                <PatientApptRow key={a.id} a={a} onChanged={bump} />
-              ))}
-            </ul>
-          </details>
-        )}
-      </section>
-      <section className="card span-4">
-        <h2>Book an appointment</h2>
-        {doctors && doctors.length > 0 ? (
+    <section className="card appt-tile" id="appointments" aria-label="My appointments">
+      <h2>My appointments</h2>
+      {notice && <Banner kind="ok">{notice}</Banner>}
+      {upErr && <Banner kind="error">{upErr}</Banner>}
+      {up && open.length === 0 && <p className="muted small">No upcoming appointments.</p>}
+      <ul className="appt-list">
+        {open.map((a) => (
+          <PatientApptRow key={a.id} a={a} onChanged={bump} />
+        ))}
+      </ul>
+      {done.length > 0 && (
+        <details>
+          <summary className="small">Past and cancelled ({done.length})</summary>
           <ul className="appt-list">
-            {doctors.map((d) => (
-              <li key={d.uniqueId} className="appt-row">
-                <div className="appt-main">
-                  <strong>{d.fullName}</strong>
-                  <span className="muted small">Linked doctor</span>
-                </div>
-                <button type="button" className="btn primary small" onClick={() => (setNotice(null), setBooking(d.uniqueId))}>
-                  Book
-                </button>
-              </li>
+            {done.slice(0, 50).map((a) => (
+              <PatientApptRow key={a.id} a={a} onChanged={bump} />
             ))}
           </ul>
-        ) : (
-          <p className="muted">None of your linked doctors takes bookings in CardiosensAI yet.</p>
-        )}
-        <p className="muted small">
-          Or find a doctor in the <Link to="/doctors">Doctors list</Link> and book from their profile.
-        </p>
-      </section>
-      {booking && (
-        <section className="card span-12">
-          <BookPanel
-            doctorId={booking}
-            onBooked={(a) => {
-              setBooking(null);
-              setNotice(`Request sent to ${a.doctor.fullName} for ${whenLabel(a.startsAt, tz)}. You’ll be told when they accept.`);
-              bump();
-            }}
-            onClose={() => setBooking(null)}
-          />
-        </section>
+        </details>
       )}
-    </div>
+      <h3>Book</h3>
+      {doctors && doctors.length > 0 ? (
+        <ul className="appt-list">
+          {doctors.map((d) => (
+            <li key={d.uniqueId} className="appt-row">
+              <div className="appt-main">
+                <strong>{d.fullName}</strong>
+                <span className="muted small">Linked doctor</span>
+              </div>
+              <button type="button" className="btn primary small" onClick={() => (setNotice(null), setBooking(d.uniqueId))}>
+                Book
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted small">None of your linked doctors takes bookings in CardiosensAI yet.</p>
+      )}
+      <p className="muted small" style={{ margin: 0 }}>
+        Or open a doctor’s card in the list and book from their profile.
+      </p>
+      {booking && (
+        <dialog ref={dialog} className="ecg-dialog" onClose={() => setBooking(null)} onClick={(e) => e.target === e.currentTarget && dialog.current?.close()} aria-label="Book an appointment">
+          <div className="ecg-dialog-box">
+            <BookPanel
+              doctorId={booking}
+              onBooked={(a) => {
+                dialog.current?.close();
+                setNotice(`Request sent to ${a.doctor.fullName} for ${whenLabel(a.startsAt, tz)}. You’ll be told when they accept.`);
+                bump();
+              }}
+              onClose={() => dialog.current?.close()}
+            />
+          </div>
+        </dialog>
+      )}
+    </section>
   );
 }
 
@@ -1112,7 +1117,7 @@ function PatientApptRow({ a, onChanged }: { a: Appointment; onChanged: () => voi
           </a>
         )}
         {a.doctor.uniqueId && (a.status === 'requested' || a.status === 'accepted') && (
-          <Link className="btn ghost small" to={`/messages/${a.doctor.uniqueId}`}>
+          <Link className="btn ghost small" to={`/links?with=${a.doctor.uniqueId}`}>
             Message
           </Link>
         )}
@@ -1255,7 +1260,7 @@ export function UpcomingAppointmentsCard() {
     <section className="card span-12">
       <div className="row spread">
         <h2 style={{ margin: 0 }}>Appointments</h2>
-        <Link to="/appointments" className="btn ghost small">
+        <Link to="/doctors#appointments" className="btn ghost small">
           {open.length ? 'All appointments' : 'Book an appointment'}
         </Link>
       </div>

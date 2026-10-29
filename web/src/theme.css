@@ -501,21 +501,12 @@ details > summary { cursor: pointer; }
 .chat-meta { font-size: 0.7rem; opacity: 0.75; text-align: right; margin-top: 2px; }
 .chat-compose { display: flex; gap: 8px; align-items: flex-end; }
 .chat-compose textarea { flex: 1; resize: vertical; min-height: 44px; }
-.chat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.chat-item { font: inherit; width: 100%; display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-2); color: var(--body); cursor: pointer; }
-.chat-item:hover, .chat-item.on { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
-.chat-preview { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 0.7rem; font-weight: 700; vertical-align: 1px; }
-.show-narrow { display: none; }
 /* doctor patient list */
 .contact-cell { display: flex; flex-direction: column; gap: 2px; font-size: 0.85rem; min-width: 0; }
 .contact-cell a { color: var(--body); text-decoration: none; white-space: nowrap; }
 .contact-cell a:hover { color: var(--primary); text-decoration: underline; }
 .unread-btn { position: relative; }
-@media (max-width: 760px) {
-  .hide-narrow { display: none; }
-  .show-narrow { display: inline-flex; }
-}
 
 /* patient details (About you), the Home address reminder, Near me on Doctors */
 .about-you fieldset { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 16px; margin: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -524,8 +515,8 @@ details > summary { cursor: pointer; }
 .about-you .field small { font-weight: 400; }
 .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px 16px; font-weight: 400; color: var(--body); margin-top: 4px; }
-.address-reminder { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between; }
-.address-reminder > div:first-child { flex: 1 1 320px; }
+.address-reminder, .listing-notice { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between; }
+.address-reminder > div:first-child, .listing-notice > div:first-child { flex: 1 1 320px; }
 .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px 24px; margin: 0; }
 .kv dt { color: var(--muted); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .kv dd { margin: 2px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
@@ -534,3 +525,20 @@ details > summary { cursor: pointer; }
 .doctor-distance { margin-top: 6px; }
 .check-grid label { flex-wrap: nowrap; align-items: flex-start; }
 .check-grid input { flex: none; margin-top: 3px; }
+
+/* patients' Doctors page: the list, and the Appointments tile on the right (above the list on narrow screens) */
+.doctors-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+.doctors-side { position: sticky; top: 96px; }
+.appt-tile { display: flex; flex-direction: column; gap: 10px; }
+.appt-tile h2 { margin: 0; font-size: 1.1rem; }
+.appt-tile h3 { margin: 6px 0 0; font-size: 0.95rem; }
+.appt-tile .appt-list { gap: 6px; }
+.appt-tile .appt-row { padding: 8px 10px; gap: 6px; }
+.appt-tile .appt-row > .row { flex-wrap: wrap; gap: 4px !important; }
+.appt-tile .btn.small { min-height: 28px; padding: 2px 9px; font-size: 0.8rem; }
+.appt-tile .pill { font-size: 0.72rem; padding: 1px 8px; }
+.appt-tile details .appt-list { margin-top: 6px; }
+@media (max-width: 960px) {
+  .doctors-layout { grid-template-columns: 1fr; }
+  .doctors-side { position: static; order: -1; }
+}

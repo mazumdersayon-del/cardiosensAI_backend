@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { api, type Link, type Party } from '../api';
 import { useAuth } from '../auth';
 import { formatId, isValidId, ROLE_LABEL, ROLE_OF_PREFIX, when } from '../format';
@@ -112,7 +112,8 @@ export function LinkRequestBox({ onDone, allowDoctorOnBehalf = false, targets }:
   );
 }
 
-export function LinksTable({ links, onChange, emptyText }: { links: Link[]; onChange: () => void; emptyText: string }) {
+/** `actions`: extra buttons for a row (patients: Message for a linked doctor). */
+export function LinksTable({ links, onChange, emptyText, actions }: { links: Link[]; onChange: () => void; emptyText: string; actions?: (l: Link) => ReactNode }) {
   const { user } = useAuth();
   const [err, setErr] = useState<string | null>(null);
   const [confirmEnd, setConfirmEnd] = useState<string | null>(null);
@@ -156,6 +157,7 @@ export function LinksTable({ links, onChange, emptyText }: { links: Link[]; onCh
                 <td>{when(l.decidedAt ?? l.createdAt)}</td>
                 <td>
                   <div className="row" style={{ justifyContent: 'flex-end' }}>
+                    {actions?.(l)}
                     {l.status === 'pending' && l.awaitingMe && (
                       <>
                         <button type="button" className="btn primary small" onClick={() => act(l.id, 'approve')}>

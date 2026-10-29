@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, type ChatMessage, type Conversation, type MessageThread } from '../api';
-import { ago, when } from '../format';
+import { api, type ChatMessage, type MessageThread } from '../api';
+import { when } from '../format';
 import { Banner, errorText, useLoad } from './ui';
 
 /*
  * Messages between a patient and a doctor they're linked with (api/v1/messages.py).
- * Thread: used on the patient's Messages page and on the doctor's patient page. Polls every 15 s.
+ * Thread: used on the patient's Care team page (Message next to a linked doctor) and on the doctor's patient page. Polls every 15 s.
  */
 
 const MAX = 2000;
@@ -140,68 +139,6 @@ export function Thread({ party, height = 420, onRead, onSent }: { party: string;
         </form>
       )}
       {sendErr && <Banner kind="error">{sendErr}</Banner>}
-    </div>
-  );
-}
-
-/** Patient: Messages page. Linked doctors on the left, the conversation on the right. */
-export function MessagesPage() {
-  const { party } = useParams();
-  const navigate = useNavigate();
-  const [tick, setTick] = useState(0);
-  const [convs, err] = useLoad(() => api<Conversation[]>('GET', '/v1/conversations'), [tick]);
-  const current = party ?? (convs && convs.length > 0 && window.matchMedia('(min-width: 761px)').matches ? convs[0].partner.userId : undefined);
-  const active = convs?.find((c) => c.partner.userId === current || c.partner.uniqueId === current);
-  return (
-    <div className="grid">
-      <section className={`card span-4 chat-list-card ${party ? 'hide-narrow' : ''}`}>
-        <h2>Messages</h2>
-        <p className="muted small" style={{ marginTop: 0 }}>
-          Write to doctors you’re linked with. For an emergency call your local emergency number, not a message.
-        </p>
-        {err && <Banner kind="error">{err}</Banner>}
-        {convs && convs.length === 0 && (
-          <div className="empty">
-            No doctors yet. Link with a doctor under <Link to="/links">Care team</Link> or find one in <Link to="/doctors">Doctors</Link>.
-          </div>
-        )}
-        <ul className="chat-list">
-          {(convs ?? []).map((c) => (
-            <li key={c.partner.userId}>
-              <button type="button" className={`chat-item ${active?.partner.userId === c.partner.userId ? 'on' : ''}`} onClick={() => navigate(`/messages/${c.partner.userId}`)}>
-                <span className="row spread" style={{ gap: 8 }}>
-                  <strong>{c.partner.fullName}</strong>
-                  {c.unread > 0 ? <span className="pill warn">{c.unread} new</span> : c.lastAt && <small className="muted">{ago(c.lastAt)}</small>}
-                </span>
-                <small className="muted chat-preview">
-                  {c.lastPreview ? `${c.lastMine ? 'You: ' : ''}${c.lastPreview}` : c.canSend ? 'Start a conversation' : 'Not linked any more'}
-                </small>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
-      <section className={`card span-8 ${party ? '' : 'hide-narrow'}`}>
-        {active ? (
-          <>
-            <div className="row spread" style={{ marginBottom: 8 }}>
-              <h2 style={{ margin: 0 }}>{active.partner.fullName}</h2>
-              <Link to="/messages" className="btn ghost small show-narrow">
-                ← All
-              </Link>
-            </div>
-            <Thread party={active.partner.userId} onRead={() => active.unread > 0 && setTick((t) => t + 1)} onSent={() => setTick((t) => t + 1)} />
-          </>
-        ) : (
-          <div className="empty">
-            {party && convs
-              ? 'You can message a doctor once you’re linked with them. Tick “Also link” when booking, or send a request under Care team.'
-              : convs?.length
-                ? 'Choose a doctor to see your messages.'
-                : ''}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

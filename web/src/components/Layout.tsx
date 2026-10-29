@@ -9,10 +9,8 @@ import SiteFooter from './SiteFooter';
 const NAV: Record<string, { to: string; label: string; badge?: boolean }[]> = {
   patient: [
     { to: '/', label: 'Home' },
-    { to: '/appointments', label: 'Appointments' },
-    { to: '/messages', label: 'Messages', badge: true },
     { to: '/doctors', label: 'Doctors' },
-    { to: '/links', label: 'Care team' },
+    { to: '/links', label: 'Care team', badge: true },
   ],
   doctor: [
     { to: '/', label: 'Home' },
